@@ -3,6 +3,7 @@ package imgen
 import (
 	"bytes"
 	crand "crypto/rand"
+	"crypto/sha3"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/crypto/sha3"
 )
 
 // GenerateRequirementsToken 生成 requirements token（发送到 chat-requirements 的 "p" 字段）。
