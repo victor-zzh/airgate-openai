@@ -197,7 +197,8 @@ func extractPromptFromMessages(body []byte) string {
 }
 
 // buildChatCompatImagePayload 构造 /v1/images/generations 或 /edits 的请求体，
-// 从 chat completions 请求体中透传 size / quality / n / background / output_format。
+// 从 chat completions 请求体中透传 size / quality / n / background / output_format /
+// response_format / style / mask。
 func buildChatCompatImagePayload(chatBody []byte, modelID, prompt string, imageRefs []string) map[string]any {
 	payload := map[string]any{
 		"prompt": prompt,
@@ -222,6 +223,16 @@ func buildChatCompatImagePayload(chatBody []byte, modelID, prompt string, imageR
 	}
 	if v := gjson.GetBytes(chatBody, "output_format").String(); v != "" {
 		payload["output_format"] = v
+	}
+	if v := gjson.GetBytes(chatBody, "response_format").String(); v != "" {
+		payload["response_format"] = v
+	}
+	if v := gjson.GetBytes(chatBody, "style").String(); v != "" {
+		payload["style"] = v
+	}
+
+	if v := gjson.GetBytes(chatBody, "mask").String(); v != "" {
+		payload["mask"] = v
 	}
 
 	if len(imageRefs) > 0 {
