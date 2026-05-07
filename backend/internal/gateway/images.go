@@ -1442,6 +1442,22 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	if len(billingSize) > 0 {
 		billSize = billingSize[0]
 	}
+	// 与 OAuth 路径对齐：优先从响应体获取真实分辨率用于计费。
+	// 优先级：响应 data[0].size → 解码 base64 图片实际宽高 → 请求 size 兜底。
+	if dataArr := gjson.GetBytes(body, "data"); dataArr.Exists() && dataArr.IsArray() {
+		for _, item := range dataArr.Array() {
+			if sz := strings.TrimSpace(item.Get("size").String()); sz != "" {
+				billSize = sz
+				break
+			}
+			if b64 := item.Get("b64_json").String(); b64 != "" {
+				if sz, ok := imageActualSizeFromBase64(b64); ok {
+					billSize = sz
+					break
+				}
+			}
+		}
+	}
 	logger.Debug("images_native_result_returned",
 		"request_model", fallbackModel,
 		sdk.LogFieldModel, modelName,
@@ -1457,6 +1473,7 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 		Model:             modelName,
 		FirstTokenMs:      elapsed.Milliseconds(),
 	}
+	usage.ImageSize = billSize
 	fillUsageCostPerImageBySize(usage, numImages, billSize)
 
 	outcome := sdk.ForwardOutcome{
