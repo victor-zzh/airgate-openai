@@ -18,10 +18,10 @@ const (
 //
 // 默认值是开发态版本，正式 release 构建时由 GitHub Actions 通过 ldflags 注入：
 //
-//	go build -ldflags "-X 'github.com/DouDOU-start/airgate-openai/backend/internal/gateway.PluginVersion=0.1.0'"
+//	go build -ldflags "-X 'github.com/DouDOU-start/airgate-openai/backend/internal/gateway.PluginVersion=0.1.42'"
 //
 // 这样 git tag 即唯一发版来源，无需手动维护 plugin.yaml / metadata.go 里的版本字段。
-var PluginVersion = "0.1.0"
+var PluginVersion = "dev"
 
 func PluginDependencies() []string {
 	return []string{}

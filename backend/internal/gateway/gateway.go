@@ -398,6 +398,113 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 	return GetCodexUsage(accountID)
 }
 
+func appendCodexUsageWindow(
+	windows []sdk.AccountUsageWindow,
+	key string,
+	label string,
+	usedPercent *float64,
+	resetAfterSeconds *int,
+	base time.Time,
+	now time.Time,
+	force bool,
+) []sdk.AccountUsageWindow {
+	if !force && usedPercent == nil && resetAfterSeconds == nil {
+		return windows
+	}
+	used := 0.0
+	if usedPercent != nil {
+		used = *usedPercent
+	}
+	var resetAt *time.Time
+	if resetAfterSeconds != nil {
+		resetAt = sdk.ResetAtFromBase(base, *resetAfterSeconds)
+	}
+	return append(windows, sdk.NewAccountUsageWindow(key, label, used, resetAt, now))
+}
+
+func buildCodexUsageWindows(snapshot *CodexUsageSnapshot, limitName string, now time.Time) []sdk.AccountUsageWindow {
+	windows := make([]sdk.AccountUsageWindow, 0, 4)
+	if snapshot == nil {
+		return windows
+	}
+	if normalized := snapshot.Normalize(); normalized != nil {
+		windows = appendCodexUsageWindow(
+			windows, "5h", "5h", normalized.Used5hPercent, normalized.Reset5hSeconds, snapshot.CapturedAt, now, false,
+		)
+		windows = appendCodexUsageWindow(
+			windows, "7d", "7d", normalized.Used7dPercent, normalized.Reset7dSeconds, snapshot.CapturedAt, now, false,
+		)
+	}
+
+	hasModelWindows := hasCodexWindowData(
+		snapshot.BengalfoxPrimaryUsedPercent,
+		snapshot.BengalfoxPrimaryResetAfterSeconds,
+		snapshot.BengalfoxPrimaryWindowMinutes,
+	) || hasCodexWindowData(
+		snapshot.BengalfoxSecondaryUsedPercent,
+		snapshot.BengalfoxSecondaryResetAfterSeconds,
+		snapshot.BengalfoxSecondaryWindowMinutes,
+	)
+	rawLimitName := strings.TrimSpace(limitName)
+	if rawLimitName == "" {
+		rawLimitName = strings.TrimSpace(snapshot.LimitName)
+	}
+	if !hasModelWindows && rawLimitName == "" {
+		return windows
+	}
+
+	displayLimitName := rawLimitName
+	if displayLimitName == "" {
+		displayLimitName = "spark"
+	}
+	modelSnapshot := &CodexUsageSnapshot{
+		PrimaryUsedPercent:         snapshot.BengalfoxPrimaryUsedPercent,
+		PrimaryResetAfterSeconds:   snapshot.BengalfoxPrimaryResetAfterSeconds,
+		PrimaryWindowMinutes:       snapshot.BengalfoxPrimaryWindowMinutes,
+		SecondaryUsedPercent:       snapshot.BengalfoxSecondaryUsedPercent,
+		SecondaryResetAfterSeconds: snapshot.BengalfoxSecondaryResetAfterSeconds,
+		SecondaryWindowMinutes:     snapshot.BengalfoxSecondaryWindowMinutes,
+		CapturedAt:                 snapshot.CapturedAt,
+	}
+	var normalized *NormalizedCodexLimits
+	if hasModelWindows {
+		normalized = modelSnapshot.Normalize()
+	}
+	forceModelWindows := rawLimitName != ""
+	var modelUsed5h *float64
+	var modelReset5h *int
+	var modelUsed7d *float64
+	var modelReset7d *int
+	if normalized != nil {
+		modelUsed5h = normalized.Used5hPercent
+		modelReset5h = normalized.Reset5hSeconds
+		modelUsed7d = normalized.Used7dPercent
+		modelReset7d = normalized.Reset7dSeconds
+	}
+	windows = appendCodexUsageWindow(
+		windows,
+		"model:5h:"+displayLimitName,
+		"5h "+displayLimitName,
+		modelUsed5h,
+		modelReset5h,
+		snapshot.CapturedAt,
+		now,
+		forceModelWindows,
+	)
+	windows = appendCodexUsageWindow(
+		windows,
+		"model:7d:"+displayLimitName,
+		"7d "+displayLimitName,
+		modelUsed7d,
+		modelReset7d,
+		snapshot.CapturedAt,
+		now,
+		forceModelWindows,
+	)
+
+	return windows
+}
+
 // HandleRequest 处理 Core 透传的自定义请求（实现 sdk.RequestHandler 接口）
 func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
 	switch path {
@@ -408,87 +515,6 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 		}
 		if err := json.Unmarshal(body, &accounts); err != nil {
 			return http.StatusBadRequest, nil, jsonError("invalid request body"), nil
-		}
-
-		appendNormalizedWindow := func(
-			windows []sdk.AccountUsageWindow,
-			key string,
-			label string,
-			usedPercent *float64,
-			resetAfterSeconds *int,
-			base time.Time,
-			now time.Time,
-		) []sdk.AccountUsageWindow {
-			if usedPercent == nil && resetAfterSeconds == nil {
-				return windows
-			}
-			used := 0.0
-			if usedPercent != nil {
-				used = *usedPercent
-			}
-			var resetAt *time.Time
-			if resetAfterSeconds != nil {
-				resetAt = sdk.ResetAtFromBase(base, *resetAfterSeconds)
-			}
-			return append(windows, sdk.NewAccountUsageWindow(key, label, used, resetAt, now))
-		}
-
-		buildUsageWindows := func(snapshot *CodexUsageSnapshot, limitName string, now time.Time) []sdk.AccountUsageWindow {
-			windows := make([]sdk.AccountUsageWindow, 0, 4)
-			if normalized := snapshot.Normalize(); normalized != nil {
-				windows = appendNormalizedWindow(
-					windows, "5h", "5h", normalized.Used5hPercent, normalized.Reset5hSeconds, snapshot.CapturedAt, now,
-				)
-				windows = appendNormalizedWindow(
-					windows, "7d", "7d", normalized.Used7dPercent, normalized.Reset7dSeconds, snapshot.CapturedAt, now,
-				)
-			}
-
-			hasModelWindows := hasCodexWindowData(
-				snapshot.BengalfoxPrimaryUsedPercent,
-				snapshot.BengalfoxPrimaryResetAfterSeconds,
-				snapshot.BengalfoxPrimaryWindowMinutes,
-			) || hasCodexWindowData(
-				snapshot.BengalfoxSecondaryUsedPercent,
-				snapshot.BengalfoxSecondaryResetAfterSeconds,
-				snapshot.BengalfoxSecondaryWindowMinutes,
-			)
-			if hasModelWindows {
-				if limitName == "" {
-					limitName = "spark"
-				}
-				modelSnapshot := &CodexUsageSnapshot{
-					PrimaryUsedPercent:         snapshot.BengalfoxPrimaryUsedPercent,
-					PrimaryResetAfterSeconds:   snapshot.BengalfoxPrimaryResetAfterSeconds,
-					PrimaryWindowMinutes:       snapshot.BengalfoxPrimaryWindowMinutes,
-					SecondaryUsedPercent:       snapshot.BengalfoxSecondaryUsedPercent,
-					SecondaryResetAfterSeconds: snapshot.BengalfoxSecondaryResetAfterSeconds,
-					SecondaryWindowMinutes:     snapshot.BengalfoxSecondaryWindowMinutes,
-					CapturedAt:                 snapshot.CapturedAt,
-				}
-				if normalized := modelSnapshot.Normalize(); normalized != nil {
-					windows = appendNormalizedWindow(
-						windows,
-						"model:5h:"+limitName,
-						"5h "+limitName,
-						normalized.Used5hPercent,
-						normalized.Reset5hSeconds,
-						snapshot.CapturedAt,
-						now,
-					)
-					windows = appendNormalizedWindow(
-						windows,
-						"model:7d:"+limitName,
-						"7d "+limitName,
-						normalized.Used7dPercent,
-						normalized.Reset7dSeconds,
-						snapshot.CapturedAt,
-						now,
-					)
-				}
-			}
-
-			return windows
 		}
 
 		result := make(map[string]sdk.AccountUsageInfo)
@@ -513,7 +539,7 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 
 			usage := sdk.AccountUsageInfo{
 				UpdatedAt: snapshot.CapturedAt.UTC().Format(time.RFC3339),
-				Windows:   buildUsageWindows(snapshot, snapshot.LimitName, now),
+				Windows:   buildCodexUsageWindows(snapshot, snapshot.LimitName, now),
 			}
 			// Credits
 			if snapshot.CreditsHasCredits {
@@ -550,35 +576,7 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 		resp := map[string]any{}
 		if snapshot != nil {
 			now := time.Now()
-			// 复用 usage/accounts 里已经写好的 windows 构建逻辑：这里不方便直接
-			// 调用（它是内层闭包），所以内联一个最小版本——只回 5h/7d 的主窗口。
-			// usage/accounts 下一次拉取时会走完整的 buildUsageWindows 分支。
-			var windows []sdk.AccountUsageWindow
-			if normalized := snapshot.Normalize(); normalized != nil {
-				if normalized.Used5hPercent != nil || normalized.Reset5hSeconds != nil {
-					var resetAt *time.Time
-					if normalized.Reset5hSeconds != nil {
-						resetAt = sdk.ResetAtFromBase(snapshot.CapturedAt, *normalized.Reset5hSeconds)
-					}
-					used := 0.0
-					if normalized.Used5hPercent != nil {
-						used = *normalized.Used5hPercent
-					}
-					windows = append(windows, sdk.NewAccountUsageWindow("5h", "5h", used, resetAt, now))
-				}
-				if normalized.Used7dPercent != nil || normalized.Reset7dSeconds != nil {
-					var resetAt *time.Time
-					if normalized.Reset7dSeconds != nil {
-						resetAt = sdk.ResetAtFromBase(snapshot.CapturedAt, *normalized.Reset7dSeconds)
-					}
-					used := 0.0
-					if normalized.Used7dPercent != nil {
-						used = *normalized.Used7dPercent
-					}
-					windows = append(windows, sdk.NewAccountUsageWindow("7d", "7d", used, resetAt, now))
-				}
-			}
-			resp["windows"] = windows
+			resp["windows"] = buildCodexUsageWindows(snapshot, snapshot.LimitName, now)
 			resp["updated_at"] = snapshot.CapturedAt.UTC().Format(time.RFC3339)
 		}
 		if probeErr != "" {

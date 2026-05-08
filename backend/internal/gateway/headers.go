@@ -260,7 +260,13 @@ func (s *CodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 func parseCodexUsageFromHeaders(h http.Header) *CodexUsageSnapshot {
 	primaryStr := h.Get("x-codex-primary-used-percent")
 	secondaryStr := h.Get("x-codex-secondary-used-percent")
-	if primaryStr == "" && secondaryStr == "" {
+	bengalfoxPrimaryStr := h.Get("x-codex-bengalfox-primary-used-percent")
+	bengalfoxSecondaryStr := h.Get("x-codex-bengalfox-secondary-used-percent")
+	limitName := h.Get("x-codex-bengalfox-limit-name")
+	if limitName == "" {
+		limitName = h.Get("x-codex-limit-name")
+	}
+	if primaryStr == "" && secondaryStr == "" && bengalfoxPrimaryStr == "" && bengalfoxSecondaryStr == "" && limitName == "" {
 		return nil
 	}
 
@@ -295,7 +301,7 @@ func parseCodexUsageFromHeaders(h http.Header) *CodexUsageSnapshot {
 		BengalfoxSecondaryResetAfterSeconds: parseInt("x-codex-bengalfox-secondary-reset-after-seconds"),
 		BengalfoxSecondaryWindowMinutes:     parseInt("x-codex-bengalfox-secondary-window-minutes"),
 		PlanType:                            strings.ToLower(h.Get("x-codex-plan-type")),
-		LimitName:                           h.Get("x-codex-bengalfox-limit-name"),
+		LimitName:                           limitName,
 		ActiveLimit:                         h.Get("x-codex-active-limit"),
 		CreditsHasCredits:                   strings.EqualFold(h.Get("x-codex-credits-has-credits"), "true"),
 		CreditsUnlimited:                    strings.EqualFold(h.Get("x-codex-credits-unlimited"), "true"),
@@ -345,10 +351,45 @@ var usageStore sync.Map
 func StoreCodexUsage(accountID int64, snapshot *CodexUsageSnapshot) {
 	if snapshot != nil {
 		cloned := cloneCodexUsageSnapshot(snapshot)
+		if existing := GetCodexUsage(accountID); existing != nil {
+			mergeCodexUsageSnapshot(cloned, existing)
+		}
 		usageStore.Store(accountID, cloned)
 		if store := getCodexUsagePersistenceStore(); store != nil {
 			store.SaveAsync(accountID, cloned)
 		}
+	}
+}
+
+func mergeCodexUsageSnapshot(next, existing *CodexUsageSnapshot) {
+	if next == nil || existing == nil {
+		return
+	}
+	if next.PlanType == "" {
+		next.PlanType = existing.PlanType
+	}
+	if next.LimitName == "" {
+		next.LimitName = existing.LimitName
+	}
+	if next.ActiveLimit == "" {
+		next.ActiveLimit = existing.ActiveLimit
+	}
+	if !next.CreditsHasCredits && existing.CreditsHasCredits {
+		next.CreditsHasCredits = existing.CreditsHasCredits
+		next.CreditsUnlimited = existing.CreditsUnlimited
+		next.CreditsBalance = existing.CreditsBalance
+	}
+	if !hasCodexWindowData(next.BengalfoxPrimaryUsedPercent, next.BengalfoxPrimaryResetAfterSeconds, next.BengalfoxPrimaryWindowMinutes) &&
+		hasCodexWindowData(existing.BengalfoxPrimaryUsedPercent, existing.BengalfoxPrimaryResetAfterSeconds, existing.BengalfoxPrimaryWindowMinutes) {
+		next.BengalfoxPrimaryUsedPercent = existing.BengalfoxPrimaryUsedPercent
+		next.BengalfoxPrimaryResetAfterSeconds = existing.BengalfoxPrimaryResetAfterSeconds
+		next.BengalfoxPrimaryWindowMinutes = existing.BengalfoxPrimaryWindowMinutes
+	}
+	if !hasCodexWindowData(next.BengalfoxSecondaryUsedPercent, next.BengalfoxSecondaryResetAfterSeconds, next.BengalfoxSecondaryWindowMinutes) &&
+		hasCodexWindowData(existing.BengalfoxSecondaryUsedPercent, existing.BengalfoxSecondaryResetAfterSeconds, existing.BengalfoxSecondaryWindowMinutes) {
+		next.BengalfoxSecondaryUsedPercent = existing.BengalfoxSecondaryUsedPercent
+		next.BengalfoxSecondaryResetAfterSeconds = existing.BengalfoxSecondaryResetAfterSeconds
+		next.BengalfoxSecondaryWindowMinutes = existing.BengalfoxSecondaryWindowMinutes
 	}
 }
 
