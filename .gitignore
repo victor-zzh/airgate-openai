@@ -9,6 +9,7 @@
 # 运行时数据
 /backend/devdata/
 tmp/
+*.log
 backend/config.yaml
 backend/config.docker.yaml
 .env

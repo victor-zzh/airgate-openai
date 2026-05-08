@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { cssVar } from '@airgate/theme';
 import type {
   AccountFormProps,
@@ -189,11 +189,15 @@ export function AccountForm({
   }, [isBatchActive, onBatchModeChange]);
 
   // 从 credentials 中读取订阅信息，没有则从 access_token JWT 解析
-  const jwtInfo = (!credentials.plan_type && credentials.access_token)
-    ? parseJWTSubscription(credentials.access_token)
-    : null;
+  const jwtInfo = useMemo(
+    () => (!credentials.plan_type && credentials.access_token)
+      ? parseJWTSubscription(credentials.access_token)
+      : null,
+    [credentials.access_token, credentials.plan_type],
+  );
   const planType = credentials.plan_type || jwtInfo?.planType || '';
   const subscriptionUntil = credentials.subscription_active_until || jwtInfo?.subscriptionUntil || '';
+  const batchRefreshTokens = useMemo(() => parseRefreshTokenLines(batchText), [batchText]);
 
   const updateField = useCallback(
     (key: string, value: string) => {
@@ -296,7 +300,7 @@ export function AccountForm({
       setOAuthStatus({ type: 'error', text: '当前环境不支持批量导入' });
       return;
     }
-    const tokens = parseRefreshTokenLines(batchText);
+    const tokens = batchRefreshTokens;
     if (tokens.length === 0) {
       setOAuthStatus({ type: 'error', text: '请至少粘贴一个 Refresh Token（每行一个）' });
       return;
@@ -323,7 +327,7 @@ export function AccountForm({
       setBatchPhase('input');
       setOAuthStatus({ type: 'error', text: err instanceof Error ? err.message : '批量导入失败' });
     }
-  }, [batchText, refreshTokenImportType, oauth, onBatchImport]);
+  }, [batchRefreshTokens, refreshTokenImportType, oauth, onBatchImport]);
 
   const resetBatch = useCallback(() => {
     setBatchText('');
@@ -649,10 +653,10 @@ export function AccountForm({
                         <button
                           type="button"
                           onClick={submitBatchRefreshImport}
-                          disabled={parseRefreshTokenLines(batchText).length === 0}
-                          style={primaryBtnStyle(parseRefreshTokenLines(batchText).length === 0)}
+                          disabled={batchRefreshTokens.length === 0}
+                          style={primaryBtnStyle(batchRefreshTokens.length === 0)}
                         >
-                          批量导入 ({parseRefreshTokenLines(batchText).length})
+                          批量导入 ({batchRefreshTokens.length})
                         </button>
                         <StatusMessage status={oauthStatus} />
                       </div>
