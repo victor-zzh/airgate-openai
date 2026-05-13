@@ -26,6 +26,7 @@ type hostForwardResponse struct {
 	Headers    http.Header
 	Body       []byte
 	Usage      *sdk.Usage
+	UsageID    int
 }
 
 type hostTaskListResponse struct {
@@ -91,8 +92,8 @@ func (g *OpenAIGateway) updateHostTask(ctx context.Context, taskID int64, status
 	return err
 }
 
-func (g *OpenAIGateway) getHostTask(ctx context.Context, taskID int64) (*sdk.HostTask, error) {
-	payload, err := g.hostInvoke(ctx, hostMethodTasksGet, map[string]interface{}{"task_id": taskID})
+func (g *OpenAIGateway) getHostTask(ctx context.Context, userID, taskID int64) (*sdk.HostTask, error) {
+	payload, err := g.hostInvoke(ctx, hostMethodTasksGet, map[string]interface{}{"task_id": taskID, "user_id": userID})
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +146,7 @@ func (g *OpenAIGateway) forwardViaHost(ctx context.Context, userID, groupID int6
 		Headers:    headerFromPayload(firstPayloadValue(payload, "headers")),
 		Body:       bytesFromPayload(firstPayloadValue(payload, "body")),
 		Usage:      usageFromPayload(firstPayloadValue(payload, "usage")),
+		UsageID:    intFromAny(firstPayloadValue(payload, "usage_id")),
 	}, nil
 }
 

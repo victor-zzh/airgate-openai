@@ -48,6 +48,9 @@ const imagesPassthroughInstructions = "Use the user's image description and appe
 const maxResponsesInputImageBytes = 2 * 1024 * 1024
 const maxRemoteImageBytes = 25 * 1024 * 1024
 
+const sanitizedImageSSEErrorMessage = "请求暂时无法完成，请稍后重试"
+const imageTooLargeSSEErrorMessage = "图片过大，请压缩后重试"
+
 // maxEditInputImageBytes 图生图（/images/edits）参考图单张上限。
 // API Key 和 Web Reverse 路径在转发前把超限图片压缩到此阈值以内，
 // 避免多张大图导致上游超时或拒绝。

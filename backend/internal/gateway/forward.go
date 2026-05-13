@@ -93,8 +93,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		return g.handleImageTaskQuery(ctx, req)
 	}
 
-	needsImage := isImagesRequest(reqPath) || isChatCompatImageModel(req.Model)
-	if needsImage && !isImageEnabled(req.Headers) {
+	if isImagesRequest(reqPath) && !isImageEnabled(req.Headers) {
 		body := jsonError("当前分组未开启图片生成功能")
 		if req.Writer != nil {
 			req.Writer.Header().Set("Content-Type", "application/json")
@@ -112,16 +111,28 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		}, nil
 	}
 
+	if !isImagesRequest(reqPath) && model.IsImageOnly(req.Model) {
+		body := jsonError("图像模型不支持 Chat Completions，请使用 Images API")
+		if req.Writer != nil {
+			req.Writer.Header().Set("Content-Type", "application/json")
+			req.Writer.WriteHeader(http.StatusBadRequest)
+			_, _ = req.Writer.Write(body)
+		}
+		return sdk.ForwardOutcome{
+			Kind: sdk.OutcomeClientError,
+			Upstream: sdk.UpstreamResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    http.Header{"Content-Type": []string{"application/json"}},
+				Body:       body,
+			},
+			Reason: "图像模型不支持 chat completions",
+		}, nil
+	}
+
 	// 图片生成任务持久化：host 可用、是 images 请求、非 ProcessTask 回调时，
 	// 创建 Core Task 并轮询结果，实现服务重启不丢任务。
 	if g.host != nil && isImagesRequest(reqPath) && !isTaskExecution(req.Headers) {
 		return g.forwardImagesViaTask(ctx, req, reqPath)
-	}
-
-	// 兼容下游平台（new-api 等）把图像模型误路由到 /v1/chat/completions：
-	// 自动转为 Images API 处理，响应包装回 Chat Completions 格式。
-	if !isImagesRequest(reqPath) && isChatCompatImageModel(req.Model) {
-		return g.forwardChatCompletionsAsImages(ctx, req)
 	}
 
 	if account.Credentials["api_key"] != "" {

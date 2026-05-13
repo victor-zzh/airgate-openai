@@ -97,6 +97,9 @@ func (g *OpenAIGateway) ProcessTask(ctx context.Context, task sdk.HostTask) erro
 			output["cost"] = resp.Usage.AccountCost
 		}
 	}
+	if resp.UsageID > 0 {
+		output["usage_id"] = resp.UsageID
+	}
 
 	if err := g.updateHostTask(ctx, task.ID, sdk.TaskStatusCompleted, 100, output, ""); err != nil {
 		return err
@@ -228,7 +231,8 @@ func (g *OpenAIGateway) handleImageTaskQuery(ctx context.Context, req *sdk.Forwa
 		return writeJSONOutcome(req.Writer, http.StatusBadRequest, sdk.OutcomeClientError, jsonError("缺少有效的 task_id 参数")), nil
 	}
 
-	task, err := g.getHostTask(ctx, taskID)
+	userID, _ := strconv.ParseInt(req.Headers.Get("X-Airgate-User-ID"), 10, 64)
+	task, err := g.getHostTask(ctx, userID, taskID)
 	if err != nil {
 		return writeJSONOutcome(req.Writer, http.StatusInternalServerError, sdk.OutcomeUpstreamTransient, jsonError("查询任务失败: "+err.Error())), nil
 	}
