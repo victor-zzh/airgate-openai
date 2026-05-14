@@ -17,7 +17,6 @@ const (
 	responsesFailureKindUnknown            responsesFailureKind = "unknown"
 	responsesFailureKindClient             responsesFailureKind = "client"
 	responsesFailureKindContinuationAnchor responsesFailureKind = "continuation_anchor"
-	responsesFailureKindModelUnsupported   responsesFailureKind = "model_unsupported"
 	responsesFailureKindRateLimited        responsesFailureKind = "rate_limited"
 	responsesFailureKindServer             responsesFailureKind = "server"
 )
@@ -40,8 +39,6 @@ func (e *responsesFailureError) outcomeKind() sdk.OutcomeKind {
 	switch e.Kind {
 	case responsesFailureKindClient, responsesFailureKindContinuationAnchor:
 		return sdk.OutcomeClientError
-	case responsesFailureKindModelUnsupported:
-		return sdk.OutcomeAccountModelUnsupported
 	case responsesFailureKindRateLimited:
 		return sdk.OutcomeAccountRateLimited
 	case responsesFailureKindServer:
@@ -60,8 +57,6 @@ func (e *responsesFailureError) Error() string {
 		return "上游续链锚点失效: " + e.Message
 	case responsesFailureKindClient:
 		return "上游请求无效: " + e.Message
-	case responsesFailureKindModelUnsupported:
-		return "当前账号不支持模型: " + e.Message
 	case responsesFailureKindRateLimited:
 		if e.RetryAfter > 0 {
 			return fmt.Sprintf("上游速率限制(建议 %s 后重试): %s", e.RetryAfter, e.Message)

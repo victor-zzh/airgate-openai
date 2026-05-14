@@ -24,7 +24,6 @@ import (
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
 //	400 + 消息含 disabled/deactivated → AccountDead
 //	5xx → UpstreamTransient
-//	4xx + 消息含模型不支持 / 不存在 → AccountModelUnsupported（当前账号或通道不支持，Core 可换号）
 //	其它 4xx → ClientError（客户端请求自己的问题，账号无辜）
 func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
 	if isTemporaryRateLimitText(message) && (statusCode == 403 || statusCode == 429) {
@@ -32,9 +31,6 @@ func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
 	}
 	if isDisabledAccountText(message) && statusCode == 403 {
 		return sdk.OutcomeAccountDead
-	}
-	if statusCode > 400 && statusCode != 429 && isModelUnsupportedText(message) {
-		return sdk.OutcomeAccountModelUnsupported
 	}
 	switch statusCode {
 	case 429:

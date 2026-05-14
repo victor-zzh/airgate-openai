@@ -674,7 +674,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		streamOutputStarted := (lastChatWriter != nil && lastChatWriter.wrote) ||
 			(lastSSEHandler != nil && lastSSEHandler.wrote)
 		// 只有已经向客户端写过可见输出时才视为流中断；首包前错误仍交给 Core failover。
-		if req.Stream && streamOutputStarted && kind != sdk.OutcomeClientError && kind != sdk.OutcomeAccountModelUnsupported {
+		if req.Stream && streamOutputStarted && kind != sdk.OutcomeClientError {
 			kind = sdk.OutcomeStreamAborted
 		}
 		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), kind.String(), message)
