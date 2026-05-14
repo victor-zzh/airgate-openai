@@ -19,6 +19,8 @@ const (
 	hostMethodTasksGet       = "tasks.get"
 	hostMethodTasksList      = "tasks.list"
 	hostMethodGatewayForward = "gateway.forward"
+	hostMethodAssetsStore    = "assets.store"
+	hostMethodAssetsStoreURL = "assets.store_url"
 )
 
 type hostForwardResponse struct {
@@ -152,6 +154,32 @@ func (g *OpenAIGateway) forwardViaHost(ctx context.Context, userID, groupID int6
 		Usage:      usageFromPayload(firstPayloadValue(payload, "usage")),
 		UsageID:    intFromAny(firstPayloadValue(payload, "usage_id")),
 	}, nil
+}
+
+func (g *OpenAIGateway) storeAsset(ctx context.Context, userID int64, scope, contentType, fileExtension string, data []byte) (string, error) {
+	payload, err := g.hostInvoke(ctx, hostMethodAssetsStore, map[string]interface{}{
+		"user_id":        userID,
+		"scope":          scope,
+		"content_type":   contentType,
+		"file_extension": fileExtension,
+		"data":           data,
+	})
+	if err != nil {
+		return "", err
+	}
+	return stringFromAny(firstPayloadValue(payload, "public_url")), nil
+}
+
+func (g *OpenAIGateway) storeAssetFromURL(ctx context.Context, userID int64, scope, sourceURL string) (string, error) {
+	payload, err := g.hostInvoke(ctx, hostMethodAssetsStoreURL, map[string]interface{}{
+		"user_id":    userID,
+		"scope":      scope,
+		"source_url": sourceURL,
+	})
+	if err != nil {
+		return "", err
+	}
+	return stringFromAny(firstPayloadValue(payload, "public_url")), nil
 }
 
 func firstPayloadValue(payload map[string]interface{}, keys ...string) interface{} {

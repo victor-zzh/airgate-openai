@@ -43,6 +43,8 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodTasksGet),
 			sdk.CapabilityForHostMethod(hostMethodTasksList),
 			sdk.CapabilityForHostMethod(hostMethodGatewayForward),
+			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
+			sdk.CapabilityForHostMethod(hostMethodAssetsStoreURL),
 		},
 		AccountTypes: []sdk.AccountType{
 			{

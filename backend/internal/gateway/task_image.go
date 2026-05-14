@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
@@ -145,9 +147,24 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 		return rt.Fail(ctx, taskErr)
 	}
 
+	if err := rt.SetProgress(ctx, 70); err != nil {
+		return err
+	}
+
+	content, err := storeImageAssetsFromResponse(ctx, g, task.UserID, resp.Body)
+	if err != nil {
+		rt.logger.Warn("store_image_assets_failed", "error", err)
+		content = ""
+	}
+	if content == "" {
+		return rt.Fail(ctx, &TaskError{
+			Type:    "upstream_error",
+			Message: "上游响应中未包含可用图片",
+		})
+	}
+
 	output := map[string]any{
-		"status_code": resp.StatusCode,
-		"body":        json.RawMessage(resp.Body),
+		"content": content,
 	}
 	if resp.Usage != nil {
 		output["model"] = resp.Usage.Model
@@ -194,6 +211,45 @@ func classifyUpstreamTaskError(statusCode int, body []byte) *TaskError {
 	}
 }
 
+// storeImageAssetsFromResponse 解析 OpenAI Images API 响应，把图片存到 Core 资产存储，
+// 返回 markdown 格式的本地 URL（如 "![image](/assets-runtime/...)\n"）。
+func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID int64, body []byte) (string, error) {
+	var resp struct {
+		Data []struct {
+			B64JSON       string `json:"b64_json"`
+			URL           string `json:"url"`
+			RevisedPrompt string `json:"revised_prompt"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("parse images response: %w", err)
+	}
+
+	scope := fmt.Sprintf("openai/images/user-%d", userID)
+	var sb strings.Builder
+	for _, item := range resp.Data {
+		var localURL string
+		var err error
+		switch {
+		case item.B64JSON != "":
+			data, decErr := base64.StdEncoding.DecodeString(item.B64JSON)
+			if decErr != nil {
+				continue
+			}
+			localURL, err = g.storeAsset(ctx, userID, scope, "image/png", ".png", data)
+		case item.URL != "" && (strings.HasPrefix(item.URL, "http://") || strings.HasPrefix(item.URL, "https://")):
+			localURL, err = g.storeAssetFromURL(ctx, userID, scope, item.URL)
+		default:
+			continue
+		}
+		if err != nil || localURL == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("![image](%s)\n", localURL))
+	}
+	return strings.TrimSpace(sb.String()), nil
+}
+
 func buildImageTaskResponse(task *sdk.HostTask) map[string]any {
 	resp := map[string]any{
 		"task_id":    task.ID,
@@ -205,8 +261,8 @@ func buildImageTaskResponse(task *sdk.HostTask) map[string]any {
 		resp["completed_at"] = *task.CompletedAt
 	}
 	if task.Output != nil {
-		if images, ok := task.Output["images"]; ok {
-			resp["images"] = images
+		if content, ok := task.Output["content"].(string); ok && content != "" {
+			resp["result_content"] = content
 		}
 		if model, ok := task.Output["model"]; ok {
 			resp["model"] = model
