@@ -760,6 +760,21 @@ export function AccountForm({
               </div>
             </>
           )}
+
+          {/* 编辑模式下显示 Refresh Token，可查看和修改 */}
+          {mode === 'edit' && (
+            <div>
+              <label style={labelStyle}>Refresh Token</label>
+              <input
+                type="text"
+                autoComplete="off"
+                style={passwordInputStyle}
+                placeholder="未设置"
+                value={credentials.refresh_token ?? ''}
+                onChange={(e) => updateField('refresh_token', e.target.value)}
+              />
+            </div>
+          )}
         </>
       )}
     </div>
