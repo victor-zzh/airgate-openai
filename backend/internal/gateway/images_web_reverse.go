@@ -194,7 +194,7 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 				sseKA.Stop()
 				g.logger.Warn("Images WebReverse 流式请求失败，已脱敏响应",
 					"model", imgReq.Model, "status_code", status, "error", err)
-				writeSSEError(req.Writer, sanitizedImageSSEErrorMessage)
+				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
 			outcome := failureOutcome(status, nil, nil, err.Error(), parseRetryDelay(err.Error()))
 			outcome.Duration = time.Since(start)
@@ -285,15 +285,10 @@ func buildWebReverseImagesResponse(res *imgen.Result, promptTokens, outputTokens
 	return b
 }
 
-// webReverseImagesError 把一个客户端错误（请求不合法 / 凭证缺失）打包为 ClientError Outcome，
-// 并同步写响应给客户端。调用方应在命中 401/403 等账号级错误前单独处理——这里不归类到账号状态。
-func webReverseImagesError(start time.Time, status int, w http.ResponseWriter, msg string) (sdk.ForwardOutcome, error) {
+// webReverseImagesError 把一个客户端错误（请求不合法 / 凭证缺失）打包为 ClientError Outcome。
+// 调用方应在命中 401/403 等账号级错误前单独处理——这里不归类到账号状态。
+func webReverseImagesError(start time.Time, status int, _ http.ResponseWriter, msg string) (sdk.ForwardOutcome, error) {
 	body := buildImagesErrorBody(status, msg)
-	if w != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write(body)
-	}
 	outcome := sdk.ForwardOutcome{
 		Kind: sdk.OutcomeClientError,
 		Upstream: sdk.UpstreamResponse{

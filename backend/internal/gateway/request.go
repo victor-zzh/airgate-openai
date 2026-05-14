@@ -194,8 +194,8 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //
 // 在 forwardHTTP 入口调用，保证 API Key / OAuth / Anthropic 等所有路径
 // 拿到的 body 格式一致。当前处理步骤：
-//  1. model 同步（body 中的 model 与核心调度选定的 model 对齐）
-//  2. 剔除客户端 previous_response_id（多账号调度下不可靠，会话接续由网关内部管理）
+//  1. model 同步（body 中的 model 与 core 传入的 model 对齐）
+//  2. 剔除客户端 previous_response_id（跨账号接续不可靠，会话接续由网关内部管理）
 //  3. 上下文守卫（/v1/chat/completions 超长 messages 裁剪）
 //  4. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
 func preprocessRequestBody(body []byte, model, reqPath string) []byte {
@@ -448,7 +448,7 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	}
 
 	// 不再从 session 回填 previous_response_id。
-	// 多账号调度下，上一轮 response 可能在另一个账号上，注入后上游会返回 "not found"；
+	// 跨账号接续时，上一轮 response 可能在另一个账号上，注入后上游会返回 "not found"；
 	// 且 function_call_output 自带 call_id，上游可以靠 call_id 匹配，不依赖 previous_response_id。
 	// 客户端的 previous_response_id 已在 preprocessRequestBody 统一剔除。
 	return reqData

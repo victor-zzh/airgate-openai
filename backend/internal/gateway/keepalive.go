@@ -4,18 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
-// imageKeepAliveInterval controls how frequently SSE ping events are sent during
-// long-running image generation requests to prevent Cloudflare 524 timeouts.
-// Cloudflare's free-tier origin timeout is 100 s; 30 s gives ample margin.
+// imageKeepAliveInterval 控制长耗时图片生成请求的 SSE ping 频率，避免 Cloudflare 524。
+// Cloudflare 免费层源站超时约 100 秒，30 秒能留出足够余量。
 const imageKeepAliveInterval = 30 * time.Second
 
 type ssePingKeepAlive struct {
 	w      http.ResponseWriter
 	cancel context.CancelFunc
 	done   chan struct{}
+	wrote  atomic.Bool
 }
 
 func startSSEPingKeepAlive(w http.ResponseWriter) *ssePingKeepAlive {
@@ -24,7 +25,6 @@ func startSSEPingKeepAlive(w http.ResponseWriter) *ssePingKeepAlive {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ka := &ssePingKeepAlive{w: w, cancel: cancel, done: make(chan struct{})}
@@ -37,6 +37,7 @@ func startSSEPingKeepAlive(w http.ResponseWriter) *ssePingKeepAlive {
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				ka.wrote.Store(true)
 				writeSSEPing(w)
 			}
 		}
@@ -50,6 +51,20 @@ func (ka *ssePingKeepAlive) Stop() {
 	}
 	ka.cancel()
 	<-ka.done
+}
+
+func (ka *ssePingKeepAlive) Wrote() bool {
+	if ka == nil {
+		return false
+	}
+	return ka.wrote.Load()
+}
+
+func writeSSEErrorIfStarted(w http.ResponseWriter, ka *ssePingKeepAlive, message string) {
+	if ka == nil || !ka.Wrote() {
+		return
+	}
+	writeSSEError(w, message)
 }
 
 func writeSSEPing(w http.ResponseWriter) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,9 +28,20 @@ const upstreamSSEMaxLineBytes = 8 * 1024 * 1024
 // 超过这个长度的单行/翻译输出会被打印 type 与长度，便于追踪谁在膨胀。
 const largeSSEEventThreshold = 512 * 1024
 
+const streamDiagnosticPreviewBytes = 1200
+
+const debugUpstreamSSEEnv = "AIRGATE_OPENAI_DEBUG_UPSTREAM_SSE"
+
 // handleStreamResponse 处理 SSE 流式响应。调用者保证 resp.StatusCode 是 2xx
 // （4xx/5xx 由调用者预先归类，不会进到这里）。
 func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time.Time, reqServiceTier string) (sdk.ForwardOutcome, error) {
+	return handleStreamResponseWithLogger(slog.Default(), resp, w, start, reqServiceTier)
+}
+
+func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w http.ResponseWriter, start time.Time, reqServiceTier string) (sdk.ForwardOutcome, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -42,14 +54,45 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 	var streamErr error
 	firstTokenRecorded := false
 	streamStarted := false
+	completed := false
+	streamErrLogged := false
+	debugUpstreamSSE := os.Getenv(debugUpstreamSSEEnv) == "1"
+	diagnostics := streamResponseDiagnostics{}
+	var pending strings.Builder
 	var toolImageIn, toolImageOut int // 接收 response.tool_usage.image_gen，用于图像工具计费。
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		diagnostics.observeLine(line)
 		data, ok := extractSSEData(line)
-		if ok && len(data) > 0 && data != "[DONE]" {
-			if streamErr = parseSSEFailureEvent([]byte(data)); streamErr != nil {
-				logStreamFailure(streamErr, resp.StatusCode, streamStarted)
+		if ok {
+			data = strings.TrimSpace(data)
+			diagnostics.observeData(data)
+			if debugUpstreamSSE && data != "" {
+				logUpstreamSSEDataDebug(logger, diagnostics, data)
+			}
+			if data == "[DONE]" {
+				completed = true
+				diagnostics.completionEvent = "[DONE]"
+			} else if data != "" {
+				if streamErr = parseSSEFailureEvent([]byte(data)); streamErr != nil {
+					logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
+					streamErrLogged = true
+					if streamStarted {
+						writeSanitizedSSEError(w)
+					}
+					break
+				}
+				if isStreamCompletionEvent(data) {
+					completed = true
+					diagnostics.completionEvent = gjson.Get(data, "type").String()
+				}
+			}
+		} else if raw := strings.TrimSpace(line); raw != "" {
+			diagnostics.observeRaw(raw)
+			if streamErr = parseSSEFailureEvent([]byte(raw)); streamErr != nil {
+				logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
+				streamErrLogged = true
 				if streamStarted {
 					writeSanitizedSSEError(w)
 				}
@@ -57,18 +100,11 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 			}
 		}
 
-		if !streamStarted {
-			w.WriteHeader(resp.StatusCode)
-		}
-		if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-			break
-		}
-		streamStarted = true
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-
-		if !ok || len(data) == 0 || data == "[DONE]" {
+		if !ok || data == "" || data == "[DONE]" {
+			if err := writeOrBufferSSELine(w, resp.StatusCode, line, &pending, &streamStarted, diagnostics.hasOutput()); err != nil {
+				streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
+				break
+			}
 			continue
 		}
 		if !firstTokenRecorded {
@@ -76,30 +112,50 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 			firstTokenRecorded = true
 		}
 		parseSSEUsage([]byte(data), usage, &toolImageIn, &toolImageOut)
+		if err := writeOrBufferSSELine(w, resp.StatusCode, line, &pending, &streamStarted, diagnostics.hasOutput()); err != nil {
+			streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
+			break
+		}
 	}
 	if err := scanner.Err(); err != nil && streamErr == nil {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
 	}
+	if streamErr == nil && !completed {
+		streamErr = fmt.Errorf("未收到上游流式完成事件")
+	}
+	if streamErr == nil && completed && !diagnostics.hasOutput() {
+		streamErr = fmt.Errorf("上游流式响应为空：已收到完成事件但没有文本、工具调用或响应输出")
+	}
 
 	elapsed := time.Since(start)
 	if streamErr != nil {
+		if !streamErrLogged {
+			logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
+		}
 		var failure *responsesFailureError
 		if errors.As(streamErr, &failure) {
 			kind := failure.outcomeKind()
 			if streamStarted && kind != sdk.OutcomeClientError {
 				kind = sdk.OutcomeStreamAborted
 			}
+			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), string(failure.Kind), failure.Message)
 			return sdk.ForwardOutcome{
 				Kind:       kind,
-				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode},
+				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
 				Reason:     failure.Message,
 				RetryAfter: failure.RetryAfter,
 				Duration:   elapsed,
 			}, nil
 		}
+		kind := sdk.OutcomeStreamAborted
+		statusCode := resp.StatusCode
+		if !streamStarted {
+			kind = sdk.OutcomeUpstreamTransient
+			statusCode = http.StatusBadGateway
+		}
 		return sdk.ForwardOutcome{
-			Kind:     sdk.OutcomeStreamAborted,
-			Upstream: sdk.UpstreamResponse{StatusCode: resp.StatusCode},
+			Kind:     kind,
+			Upstream: sdk.UpstreamResponse{StatusCode: statusCode},
 			Reason:   streamErr.Error(),
 			Duration: elapsed,
 		}, streamErr
@@ -115,27 +171,185 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 	}, nil
 }
 
-func logStreamFailure(err error, statusCode int, streamStarted bool) {
-	var failure *responsesFailureError
-	if errors.As(err, &failure) {
-		slog.Warn("上游 SSE 返回错误，已脱敏处理",
-			"kind", failure.Kind,
-			"status_code", firstNonZero(failure.StatusCode, statusCode),
-			"stream_started", streamStarted,
-			"message", failure.Message)
+func logUpstreamSSEDataDebug(logger *slog.Logger, diagnostics streamResponseDiagnostics, data string) {
+	logger.Debug("上游 SSE data 诊断",
+		"data_event_index", diagnostics.dataEventCount,
+		"non_empty_data_event_index", diagnostics.nonEmptyDataEventCount,
+		"event_type", streamDiagnosticEventType(data),
+		"finish_reason", streamDiagnosticFinishReason(data),
+		"has_output", streamDataHasOutput(data),
+		"data_preview", truncate(data, streamDiagnosticPreviewBytes),
+	)
+}
+
+type streamResponseDiagnostics struct {
+	lineCount              int
+	dataEventCount         int
+	nonEmptyDataEventCount int
+	rawLineCount           int
+	forwardedBytes         int
+	outputEventCount       int
+	firstDataPreview       string
+	lastDataPreview        string
+	firstRawPreview        string
+	lastRawPreview         string
+	completionEvent        string
+	finishReason           string
+	eventTypes             []string
+}
+
+func (d *streamResponseDiagnostics) observeLine(line string) {
+	d.lineCount++
+	d.forwardedBytes += len(line) + 1
+}
+
+func (d *streamResponseDiagnostics) observeData(data string) {
+	d.dataEventCount++
+	if data == "" {
 		return
 	}
-	slog.Warn("上游 SSE 返回错误，已脱敏处理",
-		"status_code", statusCode,
+	d.nonEmptyDataEventCount++
+	preview := truncate(data, streamDiagnosticPreviewBytes)
+	if d.firstDataPreview == "" {
+		d.firstDataPreview = preview
+	}
+	d.lastDataPreview = preview
+	if eventType := streamDiagnosticEventType(data); eventType != "" {
+		d.appendEventType(eventType)
+	}
+	if finishReason := streamDiagnosticFinishReason(data); finishReason != "" {
+		d.finishReason = finishReason
+	}
+	if streamDataHasOutput(data) {
+		d.outputEventCount++
+	}
+}
+
+func (d *streamResponseDiagnostics) observeRaw(raw string) {
+	d.rawLineCount++
+	preview := truncate(raw, streamDiagnosticPreviewBytes)
+	if d.firstRawPreview == "" {
+		d.firstRawPreview = preview
+	}
+	d.lastRawPreview = preview
+}
+
+func (d *streamResponseDiagnostics) hasOutput() bool {
+	return d.outputEventCount > 0
+}
+
+func (d *streamResponseDiagnostics) appendEventType(eventType string) {
+	for _, existing := range d.eventTypes {
+		if existing == eventType {
+			return
+		}
+	}
+	if len(d.eventTypes) >= 8 {
+		return
+	}
+	d.eventTypes = append(d.eventTypes, eventType)
+}
+
+func (d streamResponseDiagnostics) logAttrs(resp *http.Response, streamStarted bool) []any {
+	statusCode := 0
+	contentType := ""
+	transferEncoding := ""
+	upstreamRequestID := ""
+	if resp != nil {
+		statusCode = resp.StatusCode
+		contentType = resp.Header.Get("Content-Type")
+		transferEncoding = strings.Join(resp.TransferEncoding, ",")
+		upstreamRequestID = firstNonEmptyHeader(resp.Header, "X-Request-Id", "Openai-Request-Id", "Cf-Ray")
+	}
+	attrs := []any{
+		sdk.LogFieldStatus, statusCode,
 		"stream_started", streamStarted,
-		"error", err)
+		"line_count", d.lineCount,
+		"data_event_count", d.dataEventCount,
+		"non_empty_data_event_count", d.nonEmptyDataEventCount,
+		"raw_line_count", d.rawLineCount,
+		"output_event_count", d.outputEventCount,
+		"forwarded_bytes", d.forwardedBytes,
+		"completion_event", d.completionEvent,
+		"finish_reason", d.finishReason,
+		"event_types", strings.Join(d.eventTypes, ","),
+		"content_type", contentType,
+		"transfer_encoding", transferEncoding,
+	}
+	if upstreamRequestID != "" {
+		attrs = append(attrs, "upstream_request_id", upstreamRequestID)
+	}
+	if d.firstDataPreview != "" {
+		attrs = append(attrs, "first_data_preview", d.firstDataPreview)
+	}
+	if d.lastDataPreview != "" && d.lastDataPreview != d.firstDataPreview {
+		attrs = append(attrs, "last_data_preview", d.lastDataPreview)
+	}
+	if d.firstRawPreview != "" {
+		attrs = append(attrs, "first_raw_preview", d.firstRawPreview)
+	}
+	if d.lastRawPreview != "" && d.lastRawPreview != d.firstRawPreview {
+		attrs = append(attrs, "last_raw_preview", d.lastRawPreview)
+	}
+	return attrs
+}
+
+func logStreamFailure(logger *slog.Logger, err error, resp *http.Response, streamStarted bool, diagnostics streamResponseDiagnostics) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	attrs := diagnostics.logAttrs(resp, streamStarted)
+	var failure *responsesFailureError
+	if errors.As(err, &failure) {
+		attrs = append(attrs,
+			"kind", failure.Kind,
+			"classified_status_code", firstNonZero(failure.StatusCode, statusCode),
+			"message", failure.Message)
+		logger.Warn("上游 SSE 返回错误，已记录诊断详情", attrs...)
+		return
+	}
+	attrs = append(attrs, "error", err)
+	logger.Warn("上游 SSE 返回异常或空响应，已记录诊断详情", attrs...)
+}
+
+func writeOrBufferSSELine(w http.ResponseWriter, statusCode int, line string, pending *strings.Builder, streamStarted *bool, shouldFlush bool) error {
+	if *streamStarted {
+		if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
+			return err
+		}
+		flushResponseWriter(w)
+		return nil
+	}
+
+	pending.WriteString(line)
+	pending.WriteByte('\n')
+	if !shouldFlush {
+		return nil
+	}
+
+	w.WriteHeader(statusCode)
+	if _, err := fmt.Fprint(w, pending.String()); err != nil {
+		return err
+	}
+	pending.Reset()
+	*streamStarted = true
+	flushResponseWriter(w)
+	return nil
+}
+
+func flushResponseWriter(w http.ResponseWriter) {
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func writeSanitizedSSEError(w http.ResponseWriter) {
 	_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"请求暂时无法完成，请稍后重试\",\"type\":\"server_error\",\"code\":\"upstream_error\"}}\n\n"))
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	flushResponseWriter(w)
 }
 
 func firstNonZero(values ...int) int {
@@ -303,6 +517,135 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
 	return result
 }
 
+// isStreamCompletionEvent 判断 SSE data 是否为流式完成事件。
+// Responses API 以 response.completed / response.done 结束，
+// Chat Completions API 以 [DONE] 结束（调用方在解析 data 前已单独处理）。
+func isStreamCompletionEvent(data string) bool {
+	eventType := gjson.Get(data, "type").String()
+	return eventType == "response.completed" || eventType == "response.done"
+}
+
+func streamDiagnosticEventType(data string) string {
+	eventType := strings.TrimSpace(gjson.Get(data, "type").String())
+	if eventType != "" {
+		return eventType
+	}
+	if gjson.Get(data, "choices").Exists() {
+		return "chat.completion.chunk"
+	}
+	if gjson.Get(data, "error").Exists() {
+		return "error"
+	}
+	if data == "[DONE]" {
+		return "[DONE]"
+	}
+	return ""
+}
+
+func streamDiagnosticFinishReason(data string) string {
+	if reason := strings.TrimSpace(gjson.Get(data, "response.status").String()); reason != "" {
+		return reason
+	}
+	if reason := strings.TrimSpace(gjson.Get(data, "response.incomplete_details.reason").String()); reason != "" {
+		return reason
+	}
+	for _, choice := range gjson.Get(data, "choices").Array() {
+		if reason := strings.TrimSpace(choice.Get("finish_reason").String()); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func streamDataHasOutput(data string) bool {
+	if data == "" || data == "[DONE]" {
+		return false
+	}
+	if streamChatChoicesHaveOutput(data) {
+		return true
+	}
+
+	eventType := gjson.Get(data, "type").String()
+	switch eventType {
+	case "response.output_text.delta", "response.reasoning_summary_text.delta", "response.refusal.delta":
+		return strings.TrimSpace(gjson.Get(data, "delta").String()) != ""
+	case "response.output_text.done":
+		return strings.TrimSpace(gjson.Get(data, "text").String()) != ""
+	case "response.function_call_arguments.delta":
+		return gjson.Get(data, "delta").Exists()
+	case "response.function_call_arguments.done":
+		return gjson.Get(data, "arguments").Exists()
+	case "response.output_item.added", "response.output_item.done":
+		return responseItemHasOutput(gjson.Get(data, "item"))
+	case "response.completed", "response.done":
+		return responseOutputHasContent(gjson.Get(data, "response.output"))
+	default:
+		return false
+	}
+}
+
+func streamChatChoicesHaveOutput(data string) bool {
+	choices := gjson.Get(data, "choices")
+	if !choices.Exists() {
+		return false
+	}
+	for _, choice := range choices.Array() {
+		delta := choice.Get("delta")
+		if strings.TrimSpace(delta.Get("content").String()) != "" {
+			return true
+		}
+		if toolCalls := delta.Get("tool_calls"); toolCalls.Exists() && len(toolCalls.Array()) > 0 {
+			return true
+		}
+		if delta.Get("function_call").Exists() {
+			return true
+		}
+		message := choice.Get("message")
+		if strings.TrimSpace(message.Get("content").String()) != "" {
+			return true
+		}
+		if message.Get("tool_calls").Exists() || message.Get("function_call").Exists() {
+			return true
+		}
+	}
+	return false
+}
+
+func responseOutputHasContent(output gjson.Result) bool {
+	for _, item := range output.Array() {
+		if responseItemHasOutput(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func responseItemHasOutput(item gjson.Result) bool {
+	itemType := item.Get("type").String()
+	switch itemType {
+	case "message":
+		for _, content := range item.Get("content").Array() {
+			if strings.TrimSpace(content.Get("text").String()) != "" {
+				return true
+			}
+		}
+		return false
+	case "function_call", "web_search_call", "image_generation_call", "code_interpreter_call":
+		return true
+	default:
+		return strings.Contains(itemType, "call")
+	}
+}
+
+func firstNonEmptyHeader(headers http.Header, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(headers.Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // extractSSEData 从 SSE 行中提取 data 内容
 func extractSSEData(line string) (string, bool) {
 	if !strings.HasPrefix(line, "data:") {
@@ -375,6 +718,9 @@ func parseSSEFailureEvent(data []byte) error {
 		return failure
 	}
 	if failure := classifyWSErrorEvent(data); failure != nil {
+		return failure
+	}
+	if failure := classifyGenericSSEErrorEvent(data); failure != nil {
 		return failure
 	}
 	eventType := gjson.GetBytes(data, "type").String()

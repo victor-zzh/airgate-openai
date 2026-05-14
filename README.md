@@ -24,7 +24,7 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
 
 ## ✨ 核心特性
 
-- **🔌 双账号类型** — `apikey`（任何 Responses 兼容服务）与 `oauth`（浏览器登录 ChatGPT，自动刷新 token）同池调度，core 选好账号后插件按类型分发
+- **🔌 双账号类型** — `apikey`（任何 Responses 兼容服务）与 `oauth`（浏览器登录 ChatGPT，自动刷新 token），插件按账号类型选择上游协议
 - **🔄 Anthropic 协议翻译** — Claude 客户端的 `/v1/messages` 一步直转为 Responses API 请求，SSE 流再回译为 Anthropic 事件，工具调用 / 推理 token / stop_reason 全保留
 - **🌐 双协议入口** — 同一个 `/v1/responses` 同时支持 HTTP/SSE 与 WebSocket；OAuth 账号走 WebSocket 上行，再以 SSE 写回客户端
 - **🎯 模型降级与重试** — Anthropic 转发链路在模型不存在 / 被拒时自动降级到映射表里的下一个候选
@@ -38,7 +38,7 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
 ```text
                   ┌──────────────────────────────────────┐
                   │           AirGate Core               │
-                  │   (账号 / 调度 / 计费 / 管理后台)     │
+                  │      (账号 / 计费 / 管理后台)        │
                   └────────────┬─────────────────────────┘
                                │ go-plugin (gRPC)
                                ▼
@@ -64,7 +64,7 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
 **请求生命周期**：
 
 ```text
-客户端请求 ──► Core 鉴权 ──► Core 选账号 ──► Plugin.Forward()
+客户端请求 ──► Core 鉴权 ──► Plugin.Forward()
                                                   │
                                           ┌───────┴───────┐
                                           ▼               ▼
@@ -81,7 +81,7 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
                               Core 入库扣费   Core 更新账号
 ```
 
-`Forward()` 拿到 core 调度好的账号，识别请求是 Anthropic Messages、OpenAI 原生还是 Images API，再分发到 `forwardAPIKey`（HTTP/SSE 直连）或 `forwardOAuth`（WebSocket 桥接）。插件负责计算平台标准用量与标准成本，core 负责统一入库并按用户倍率扣费。
+`Forward()` 拿到 core 传入的账号，识别请求是 Anthropic Messages、OpenAI 原生还是 Images API，再分发到 `forwardAPIKey`（HTTP/SSE 直连）或 `forwardOAuth`（WebSocket 桥接）。插件负责协议适配、上游请求和平台标准用量/成本计算，core 负责鉴权、账号选择、入库与按用户倍率扣费。
 
 ## 🚦 路由
 
@@ -96,8 +96,6 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
 | GET  | `/v1/models` | 模型列表 |
 | POST | `/v1/images/generations` | Images API（文生图） |
 | POST | `/v1/images/edits` | Images API（图生图 / 编辑） |
-| GET  | `/v1/images/tasks` | Images Task 状态查询 |
-| GET  | `/v1/images/tasks/list` | Images Task 历史列表 |
 | WS   | `/v1/responses` | Responses API（WebSocket）|
 
 另外提供不带 `/v1` 前缀的别名路由（`POST /responses`、`POST /chat/completions`、`POST /messages`、`GET /models`、`WS /responses` 等），方便客户端直接填站点根地址。

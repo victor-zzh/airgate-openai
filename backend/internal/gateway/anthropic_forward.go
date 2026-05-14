@@ -54,13 +54,15 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 
 	// 1. 验证请求（纯 gjson）
 	if statusCode, errType, errMsg := validateAnthropicRequestJSON(body); statusCode != 0 {
-		if req.Writer != nil {
-			writeAnthropicErrorJSON(req.Writer, statusCode, errType, errMsg)
-		}
+		errBody := anthropicErrorJSON(errType, errMsg)
 		// 客户端请求本身无效（缺字段 / 格式错）
 		return sdk.ForwardOutcome{
-			Kind:     sdk.OutcomeClientError,
-			Upstream: sdk.UpstreamResponse{StatusCode: statusCode},
+			Kind: sdk.OutcomeClientError,
+			Upstream: sdk.UpstreamResponse{
+				StatusCode: statusCode,
+				Headers:    http.Header{"Content-Type": []string{"application/json"}},
+				Body:       errBody,
+			},
 			Reason:   errMsg,
 			Duration: time.Since(start),
 		}, nil
@@ -494,12 +496,10 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {
-			if failure.shouldReturnClientError() && w != nil {
-				writeAnthropicErrorJSON(w, failure.StatusCode, failure.AnthropicErrorType, failure.Message)
-			}
+			body := anthropicErrorJSON(failure.AnthropicErrorType, failure.Message)
 			return sdk.ForwardOutcome{
 				Kind:       failure.outcomeKind(),
-				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode},
+				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
 				Reason:     failure.Message,
 				RetryAfter: failure.RetryAfter,
 				Duration:   time.Since(start),
@@ -592,14 +592,11 @@ func (g *OpenAIGateway) writeAnthropicUpstreamError(
 		retryAfter = parseRetryDelay(errMsg)
 	}
 
-	// 仅客户端错误才写 w 透传；账号级 / 上游错误保持 w unwritten 以便 failover。
-	if kind == sdk.OutcomeClientError && w != nil {
-		writeAnthropicErrorJSON(w, statusCode, anthropicErrorType(statusCode), errMsg)
-	}
+	errBody := anthropicErrorJSON(anthropicErrorType(statusCode), errMsg)
 
 	outcome := sdk.ForwardOutcome{
 		Kind:       kind,
-		Upstream:   sdk.UpstreamResponse{StatusCode: statusCode, Body: body},
+		Upstream:   sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
 		Reason:     errMsg,
 		RetryAfter: retryAfter,
 		Duration:   time.Since(start),

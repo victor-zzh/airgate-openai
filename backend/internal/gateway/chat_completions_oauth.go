@@ -77,6 +77,7 @@ type chatCompletionsStreamWriter struct {
 	firstTokenOnce sync.Once
 	firstTokenMs   int64
 	start          time.Time
+	wrote          bool
 
 	accountID  int64
 	sessionKey string
@@ -150,6 +151,9 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 		if _, err := fmt.Fprintf(s.w, "data: %s\n\n", chunk); err != nil {
 			return
 		}
+	}
+	if len(chunks) > 0 {
+		s.wrote = true
 	}
 	if s.flusher != nil && len(chunks) > 0 {
 		s.flusher.Flush()

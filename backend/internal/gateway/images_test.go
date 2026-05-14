@@ -263,6 +263,22 @@ func TestWriteSSEPingUsesOpenAIStyleEvent(t *testing.T) {
 	}
 }
 
+func TestStartSSEPingKeepAliveDoesNotCommitImmediately(t *testing.T) {
+	w := httptest.NewRecorder()
+	sseKA := startSSEPingKeepAlive(w)
+	sseKA.Stop()
+
+	if sseKA.Wrote() {
+		t.Fatalf("首个 ping 前不应标记流已写入")
+	}
+	if body := w.Body.String(); body != "" {
+		t.Fatalf("body = %q，首个 ping 前应为空", body)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+}
+
 func TestHandleImagesResponse_StreamWrapsRESTJSONAsSSE(t *testing.T) {
 	body := `{"created":1713833628,"data":[{"b64_json":"iVBORw0"}],"usage":{"input_tokens":1,"output_tokens":2}}`
 	resp := &http.Response{
@@ -1194,8 +1210,8 @@ func TestForwardImagesViaResponsesTool_EmptyPrompt(t *testing.T) {
 	if outcome.Upstream.StatusCode != http.StatusBadRequest {
 		t.Errorf("Upstream.StatusCode = %d, want 400", outcome.Upstream.StatusCode)
 	}
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("writer status = %d, want 400", w.Code)
+	if w.Body.Len() != 0 {
+		t.Errorf("Core 处理 outcome 前不应提交 writer，实际写入 %q", w.Body.String())
 	}
 }
 
@@ -1281,8 +1297,8 @@ func TestForwardImagesViaResponsesTool_InvalidSize(t *testing.T) {
 	if outcome.Upstream.StatusCode != http.StatusBadRequest {
 		t.Errorf("Upstream.StatusCode = %d, want 400", outcome.Upstream.StatusCode)
 	}
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("writer status = %d, want 400", w.Code)
+	if w.Body.Len() != 0 {
+		t.Errorf("Core 处理 outcome 前不应提交 writer，实际写入 %q", w.Body.String())
 	}
 	if !strings.Contains(string(outcome.Upstream.Body), "16") {
 		t.Errorf("error body should mention the 16-multiple constraint: %s", outcome.Upstream.Body)
