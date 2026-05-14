@@ -183,7 +183,11 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 		replayBody = fullResponsesBody
 	}
 
-	return g.doAnthropicForward(ctx, req, responsesBody, replayBody, originalModel, modelName, fallbackModel, start, session)
+	outcome, err := g.doAnthropicForward(ctx, req, responsesBody, replayBody, originalModel, modelName, fallbackModel, start, session)
+	if mappingEffort != "" {
+		setUsageReasoningEffort(outcome.Usage, mappingEffort)
+	}
+	return outcome, err
 }
 
 // doAnthropicForward 执行 Anthropic 转发，支持模型降级重试。
