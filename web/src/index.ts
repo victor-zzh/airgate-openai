@@ -4,14 +4,19 @@ import { OpenAIIcon } from './components/OpenAIIcon';
 import { AccountIdentity } from './components/AccountIdentity';
 import { UsageCostDetail } from './components/UsageCostDetail';
 import { UsageMetricDetail } from './components/UsageMetricDetail';
-import { UsageModelMeta } from './components/UsageModelMeta';
+import { UsageModelMeta, isUsageServiceTierFast } from './components/UsageModelMeta';
 import { UsageWindow } from './components/UsageWindow';
 
-const plugin: PluginFrontendModule = {
+type PluginFrontendModuleWithResolvers = PluginFrontendModule & {
+  isUsageServiceTierFast?: typeof isUsageServiceTierFast;
+};
+
+const plugin: PluginFrontendModuleWithResolvers = {
   accountCreate: AccountForm,
   accountEdit: AccountForm,
   accountIdentity: AccountIdentity,
   accountUsageWindow: UsageWindow,
+  isUsageServiceTierFast,
   usageModelMeta: UsageModelMeta,
   usageMetricDetail: UsageMetricDetail,
   usageCostDetail: UsageCostDetail,
