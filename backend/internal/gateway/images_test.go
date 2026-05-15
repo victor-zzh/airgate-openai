@@ -90,10 +90,11 @@ func TestPrefersAsyncResponse(t *testing.T) {
 }
 
 func TestImageTaskLocation(t *testing.T) {
-	if got := imageTaskLocation("/v1/images/generations", 123); got != "/v1/images/tasks?task_id=123" {
+	const taskID = "018f2f8a-9f8a-7c11-9f2a-8a9f8a7c119f"
+	if got := imageTaskLocation("/v1/images/generations", taskID); got != "/v1/images/tasks?task_id="+taskID {
 		t.Fatalf("v1 location = %q", got)
 	}
-	if got := imageTaskLocation("/images/generations", 123); got != "/images/tasks?task_id=123" {
+	if got := imageTaskLocation("/images/generations", taskID); got != "/images/tasks?task_id="+taskID {
 		t.Fatalf("non-v1 location = %q", got)
 	}
 }
