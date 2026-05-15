@@ -116,6 +116,26 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	groupID, _ := intFromInput(task.Input, "group_id")
 	model, _ := task.Input["model"].(string)
 
+	isRedispatch := task.Attempts > 1
+	hasUpstreamID := false
+	if task.Execution != nil {
+		if uid, ok := task.Execution["upstream_task_id"].(string); ok && uid != "" {
+			hasUpstreamID = true
+			_ = uid
+		}
+	}
+
+	// 重启重派：没有上游 task_id 的任务无法恢复，直接标记失败
+	if isRedispatch && !hasUpstreamID {
+		rt.logger.Info("task_redispatch_no_upstream_id", "task_id", task.ID)
+		return rt.Fail(ctx, &TaskError{
+			Type:    "upstream_error",
+			Message: "任务在服务重启期间中断，请重新发起",
+		})
+	}
+
+	shrinkTaskInputImages(task.Input)
+
 	reqBody, err := buildImageRequestBody(task.Input)
 	if err != nil {
 		return rt.Fail(ctx, &TaskError{
@@ -130,11 +150,10 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	headers.Set(taskExecHeader, "true")
 	headers.Set(taskIDHeader, strconv.FormatInt(task.ID, 10))
 
-	if task.Execution != nil {
-		if uid, ok := task.Execution["upstream_task_id"].(string); ok && uid != "" {
-			headers.Set(upstreamTaskIDHeader, uid)
-			rt.logger.Info("task_retry_with_upstream_id", "upstream_task_id", uid)
-		}
+	if hasUpstreamID {
+		uid := task.Execution["upstream_task_id"].(string)
+		headers.Set(upstreamTaskIDHeader, uid)
+		rt.logger.Info("task_retry_with_upstream_id", "upstream_task_id", uid)
 	}
 
 	if err := rt.SetProgress(ctx, 30); err != nil {
@@ -146,7 +165,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 		return rt.Fail(ctx, &TaskError{
 			Type:      "upstream_error",
 			Message:   "upstream 转发失败: " + err.Error(),
-			Retryable: true,
+			Retryable: !isRedispatch,
 		})
 	}
 
@@ -360,4 +379,19 @@ func stringSliceFromInput(input map[string]any, key string) []string {
 		return out
 	}
 	return nil
+}
+
+// shrinkTaskInputImages 对任务输入中的图片做压缩，复用直通路径的 shrinkDataImageURL。
+// mask 保持 PNG 不压缩（需要透明通道）。
+func shrinkTaskInputImages(input map[string]any) {
+	images := stringSliceFromInput(input, "images")
+	if len(images) == 0 {
+		return
+	}
+	for i, ref := range images {
+		if shrunk, err := shrinkDataImageURL(ref, maxEditInputImageBytes); err == nil {
+			images[i] = shrunk
+		}
+	}
+	input["images"] = images
 }

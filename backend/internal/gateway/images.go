@@ -837,6 +837,12 @@ func shrinkResponsesInputImages(req *imagesRequest) error {
 }
 
 func shrinkResponsesInputImageRef(ref string) (string, error) {
+	return shrinkDataImageURL(ref, maxResponsesInputImageBytes)
+}
+
+// shrinkDataImageURL 将 data URL 格式的图片压缩到 limit 字节以内。
+// 非 data URL（如 http(s)）直接返回不处理。
+func shrinkDataImageURL(ref string, limit int) (string, error) {
 	if !strings.HasPrefix(ref, "data:") {
 		return ref, nil
 	}
@@ -851,14 +857,14 @@ func shrinkResponsesInputImageRef(ref string) (string, error) {
 			return "", err
 		}
 	}
-	if len(data) <= maxResponsesInputImageBytes {
+	if len(data) <= limit {
 		return ref, nil
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("图片过大且无法压缩: %w", err)
 	}
-	return encodeJPEGDataURLWithinLimit(img, maxResponsesInputImageBytes)
+	return encodeJPEGDataURLWithinLimit(img, limit)
 }
 
 func encodeJPEGDataURLWithinLimit(img image.Image, limit int) (string, error) {
