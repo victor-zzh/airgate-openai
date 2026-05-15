@@ -162,7 +162,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	}
 
 	numImages := estimateImageCountFromTokens(toolImageOut)
-	fillUsageCostWithImageTool(usage, numImages)
+	fillUsageCostWithImageTool(usage, numImages, "")
 	return sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{StatusCode: resp.StatusCode},
@@ -389,7 +389,7 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 		parsed.reasoningOutputTokens,
 		elapsed.Milliseconds(),
 	)
-	fillUsageCostWithImageTool(usage, estimateImageCountFromTokens(parsed.toolImageOutputTokens))
+	fillUsageCostWithImageTool(usage, estimateImageCountFromTokens(parsed.toolImageOutputTokens), "")
 
 	outcome := sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,

@@ -658,6 +658,10 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		firstTokenMs,
 	)
 	numImages := len(result.ImageGenCalls)
+	imageToolSize := ""
+	if numImages > 0 {
+		imageToolSize = result.ImageGenCalls[0].Size
+	}
 
 	if result.Err != nil {
 		var failure *responsesFailureError
@@ -738,7 +742,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		"output_tokens", result.OutputTokens,
 		"stream", req.Stream,
 	)
-	fillUsageCostWithImageTool(usage, numImages)
+	fillUsageCostWithImageTool(usage, numImages, imageToolSize)
 	return sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{StatusCode: http.StatusOK},

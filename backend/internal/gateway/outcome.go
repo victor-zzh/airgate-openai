@@ -449,21 +449,6 @@ func fillUsageCost(usage *sdk.Usage) {
 	})
 }
 
-// fillUsageCostPerImage 按张计费模式填充 Usage。
-// 用于 /v1/images/generations 和 /v1/images/edits 等专用图像端点，
-// usage.Model 必须是注册了 ImagePrice 的模型。
-func fillUsageCostPerImage(usage *sdk.Usage, numImages int) {
-	if usage == nil || usage.Model == "" || numImages <= 0 {
-		return
-	}
-	spec := model.Lookup(usage.Model)
-	if spec.ImagePrice <= 0 {
-		fillUsageCost(usage)
-		return
-	}
-	addImageCost(usage, usageCostImage, "图片生成", numImages, spec.ImagePrice, "")
-}
-
 // fillUsageCostPerImageBySize 按 1K/2K/4K size 分档填充 Usage（USD/张）。
 // 用于 OAuth → image_generation tool 路径，价格由 imagePriceForSize 硬编码（详见其注释）。
 // 跟 spec.ImagePrice 解耦：plugin.yaml 不需要登记 ImagePrice，分档定价完全由网关侧决定。
@@ -476,18 +461,15 @@ func fillUsageCostPerImageBySize(usage *sdk.Usage, numImages int, size string) {
 	addImageCost(usage, usageCostImage, "图片生成", numImages, price, size)
 }
 
-// fillUsageCostWithImageTool 先按主 model 定价算 token 成本，再叠加图像按张费用。
-// numImages 是本次请求实际生成的图片张数（0 表示无图像工具调用）。
-func fillUsageCostWithImageTool(usage *sdk.Usage, numImages int) {
+// fillUsageCostWithImageTool 先按主 model 定价算 token 成本，再按尺寸分档叠加图像费用。
+func fillUsageCostWithImageTool(usage *sdk.Usage, numImages int, size string) {
 	fillUsageCost(usage)
 	if usage == nil || numImages <= 0 {
 		return
 	}
-	imageSpec := model.Lookup(imageToolCostModel)
-	if imageSpec.ImagePrice <= 0 {
-		return
-	}
-	addImageCost(usage, usageCostImageTool, "图片工具", numImages, imageSpec.ImagePrice, "")
+	price := imagePriceForSize(size)
+	setUsageImageSize(usage, size)
+	addImageCost(usage, usageCostImageTool, "图片工具", numImages, price, size)
 }
 
 func addImageCost(usage *sdk.Usage, key, label string, numImages int, pricePerImage float64, size string) {

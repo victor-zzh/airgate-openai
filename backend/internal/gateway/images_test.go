@@ -384,18 +384,13 @@ func TestHandleImagesResponse_FallbackModelWhenBodyLacksModel(t *testing.T) {
 	}
 }
 
-// TestFillUsageCostPerImage 按张计费。
-func TestFillUsageCostPerImage(t *testing.T) {
-	usage := &sdk.Usage{
-		Model: "gpt-image-1",
-	}
-	fillUsageCostPerImage(usage, 3)
-	// 3 张 × $0.20 = 0.60
-	if !almostEqual(usage.AccountCost, 0.60, 1e-9) {
-		t.Errorf("AccountCost = %v, want 0.60", usage.AccountCost)
-	}
-	if !almostEqual(usageCostByKey(usage, usageCostInput), 0, 1e-9) {
-		t.Errorf("input cost = %v, want 0", usageCostByKey(usage, usageCostInput))
+// TestFillUsageCostPerImageBySize_1K 按尺寸分档计费 1K。
+func TestFillUsageCostPerImageBySize_1K(t *testing.T) {
+	usage := &sdk.Usage{Model: "gpt-image-1"}
+	fillUsageCostPerImageBySize(usage, 3, "1024x1024")
+	// 3 张 × $0.10 = 0.30
+	if !almostEqual(usage.AccountCost, 0.30, 1e-9) {
+		t.Errorf("AccountCost = %v, want 0.30", usage.AccountCost)
 	}
 }
 
@@ -560,19 +555,19 @@ func TestParseSSEUsage_ToolImageGen(t *testing.T) {
 }
 
 // TestFillUsageCostWithImageTool 叠加计费：主 model (gpt-5.4) 的 chat token 按
-// 其单价、image tool 按张计费 $0.20/张。
+// 其单价、image tool 按尺寸分档计费。
 func TestFillUsageCostWithImageTool(t *testing.T) {
 	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0)
-	fillUsageCostWithImageTool(usage, 1)
+	fillUsageCostWithImageTool(usage, 1, "1024x1024")
 
 	// 主 gpt-5.4 standard: input=$2.5/1M → 0.0025, output=$15/1M → 0.0075
-	// image tool: 1 张 × $0.20 = 0.20
-	// total account cost = 0.0025 + 0.0075 + 0.20 = 0.2100
+	// image tool: 1 张 × $0.10 (1K) = 0.10
+	// total account cost = 0.0025 + 0.0075 + 0.10 = 0.1100
 	if !almostEqual(usageCostByKey(usage, usageCostInput), 0.0025, 1e-9) {
 		t.Errorf("input cost = %v, want 0.0025", usageCostByKey(usage, usageCostInput))
 	}
-	if !almostEqual(usage.AccountCost, 0.2100, 1e-9) {
-		t.Errorf("AccountCost = %v, want 0.2100", usage.AccountCost)
+	if !almostEqual(usage.AccountCost, 0.1100, 1e-9) {
+		t.Errorf("AccountCost = %v, want 0.1100", usage.AccountCost)
 	}
 	if got := usage.Metrics[0].Metadata["unit_price"]; got != "2.5" {
 		t.Errorf("input unit_price = %q, want 2.5", got)
@@ -582,7 +577,7 @@ func TestFillUsageCostWithImageTool(t *testing.T) {
 // TestFillUsageCostWithImageTool_NoToolUsage 退化为 fillUsageCost 行为不变。
 func TestFillUsageCostWithImageTool_NoToolUsage(t *testing.T) {
 	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0)
-	fillUsageCostWithImageTool(usage, 0)
+	fillUsageCostWithImageTool(usage, 0, "")
 	if usageMetricInt(usage, usageMetricInputTokens) != 1000 || usageMetricInt(usage, usageMetricOutputTokens) != 500 {
 		t.Errorf("token counts mutated when no image tool usage")
 	}
