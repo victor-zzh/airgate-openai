@@ -4,7 +4,7 @@ import { OpenAIIcon } from './components/OpenAIIcon';
 import { AccountIdentity } from './components/AccountIdentity';
 import { UsageCostDetail } from './components/UsageCostDetail';
 import { UsageMetricDetail } from './components/UsageMetricDetail';
-import { UsageModelMeta, isUsageServiceTierFast } from './components/UsageModelMeta';
+import { UsageModelMeta } from './components/UsageModelMeta';
 import { UsageWindow } from './components/UsageWindow';
 
 const plugin: PluginFrontendModule = {
@@ -12,7 +12,6 @@ const plugin: PluginFrontendModule = {
   accountEdit: AccountForm,
   accountIdentity: AccountIdentity,
   accountUsageWindow: UsageWindow,
-  isUsageServiceTierFast,
   usageModelMeta: UsageModelMeta,
   usageMetricDetail: UsageMetricDetail,
   usageCostDetail: UsageCostDetail,
