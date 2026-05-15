@@ -40,8 +40,8 @@ function imageSizeDotColor(imageSize: string): string {
 
   const dimensions = normalized.match(/\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? [];
   const maxDimension = Math.max(0, ...dimensions);
-  if (maxDimension >= 3072) return EFFORT_HIGH_COLOR;
-  if (maxDimension >= 1536) return EFFORT_MEDIUM_COLOR;
+  if (maxDimension > 2048) return EFFORT_HIGH_COLOR;
+  if (maxDimension > 1536) return EFFORT_MEDIUM_COLOR;
   return EFFORT_LOW_COLOR;
 }
 
