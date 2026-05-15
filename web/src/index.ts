@@ -7,11 +7,7 @@ import { UsageMetricDetail } from './components/UsageMetricDetail';
 import { UsageModelMeta, isUsageServiceTierFast } from './components/UsageModelMeta';
 import { UsageWindow } from './components/UsageWindow';
 
-type PluginFrontendModuleWithResolvers = PluginFrontendModule & {
-  isUsageServiceTierFast?: typeof isUsageServiceTierFast;
-};
-
-const plugin: PluginFrontendModuleWithResolvers = {
+const plugin: PluginFrontendModule = {
   accountCreate: AccountForm,
   accountEdit: AccountForm,
   accountIdentity: AccountIdentity,

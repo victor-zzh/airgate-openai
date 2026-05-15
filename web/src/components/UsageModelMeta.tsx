@@ -19,13 +19,13 @@ const EFFORT_COLORS: Record<string, string> = {
   xhigh: EFFORT_XHIGH_COLOR,
 };
 const IMAGE_SIZE_COLOR = 'rgb(148,163,184)';
-const FAST_SERVICE_TIER_COLOR = 'oklch(62% 0.23 303)';
+const FAST_SERVICE_TIER_COLOR = 'rgb(168, 85, 247)';
 
 function imageSizeDotColor(imageSize: string): string {
   const normalized = imageSize.trim().toLowerCase();
-  if (normalized.includes('4k')) return EFFORT_HIGH_COLOR;
-  if (normalized.includes('2k')) return EFFORT_MEDIUM_COLOR;
-  if (normalized.includes('1k')) return EFFORT_LOW_COLOR;
+  if (/\b4k\b/.test(normalized)) return EFFORT_HIGH_COLOR;
+  if (/\b2k\b/.test(normalized)) return EFFORT_MEDIUM_COLOR;
+  if (/\b1k\b/.test(normalized)) return EFFORT_LOW_COLOR;
 
   const dimensions = normalized.match(/\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? [];
   const maxDimension = Math.max(0, ...dimensions);
