@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -176,11 +177,25 @@ func (g *OpenAIGateway) forwardTask(ctx context.Context, req *sdk.ForwardRequest
 
 	logger.Info("task_created", "task_id", task.ID, "task_type", handler.Type())
 
-	resp := map[string]any{"task_id": task.ID, "status": "pending"}
+	publicTaskID := externalTaskID(task)
+	location := imageTaskLocation(reqPath, publicTaskID)
+	resp := map[string]any{
+		"object":     "image.task",
+		"task_id":    publicTaskID,
+		"status":     "pending",
+		"status_url": location,
+	}
 	respBody, _ := json.Marshal(resp)
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	headers.Set("Preference-Applied", "respond-async")
+	headers.Set("Location", location)
 
 	if req.Writer != nil {
-		req.Writer.Header().Set("Content-Type", "application/json")
+		for key, values := range headers {
+			for _, value := range values {
+				req.Writer.Header().Add(key, value)
+			}
+		}
 		req.Writer.WriteHeader(http.StatusAccepted)
 		_, _ = req.Writer.Write(respBody)
 	}
@@ -188,10 +203,17 @@ func (g *OpenAIGateway) forwardTask(ctx context.Context, req *sdk.ForwardRequest
 		Kind: sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{
 			StatusCode: http.StatusAccepted,
-			Headers:    http.Header{"Content-Type": []string{"application/json"}},
+			Headers:    headers,
 			Body:       respBody,
 		},
 	}, nil
+}
+
+func imageTaskLocation(reqPath string, taskID string) string {
+	if strings.HasPrefix(reqPath, "/images/") {
+		return "/images/tasks?task_id=" + url.QueryEscape(taskID)
+	}
+	return "/v1/images/tasks?task_id=" + url.QueryEscape(taskID)
 }
 
 // isTaskExecution 检测当前请求是否由 ProcessTask 通过 host.Forward 发起（递归守卫）。
@@ -202,37 +224,52 @@ func isTaskExecution(headers http.Header) bool {
 // ── Task HTTP 查询 ──
 
 func (g *OpenAIGateway) handleTaskQuery(ctx context.Context, req *sdk.ForwardRequest, handler TaskHandler) (sdk.ForwardOutcome, error) {
-	taskIDStr := ""
-	if qs := req.Headers.Get("X-Forwarded-Query"); qs != "" {
-		for _, pair := range strings.Split(qs, "&") {
-			kv := strings.SplitN(pair, "=", 2)
-			if len(kv) == 2 && kv[0] == "task_id" {
-				taskIDStr = kv[1]
-			}
-		}
-	}
-	if taskIDStr == "" || !isNumeric(taskIDStr) {
-		var body struct {
-			TaskID int64 `json:"task_id"`
-		}
-		if json.Unmarshal(req.Body, &body) == nil && body.TaskID > 0 {
-			taskIDStr = strconv.FormatInt(body.TaskID, 10)
-		}
-	}
-
-	taskID, err := strconv.ParseInt(taskIDStr, 10, 64)
-	if err != nil || taskID <= 0 {
+	taskIDStr := imageTaskIDFromRequest(req)
+	if taskIDStr == "" {
 		return writeJSONOutcome(req.Writer, http.StatusBadRequest, sdk.OutcomeClientError, jsonError("缺少有效的 task_id 参数")), nil
 	}
 
 	userID, _ := strconv.ParseInt(req.Headers.Get("X-Airgate-User-ID"), 10, 64)
-	task, err := g.getHostTask(ctx, userID, taskID)
+	var (
+		task *sdk.HostTask
+		err  error
+	)
+	if isNumeric(taskIDStr) {
+		taskID, parseErr := strconv.ParseInt(taskIDStr, 10, 64)
+		if parseErr != nil || taskID <= 0 {
+			return writeJSONOutcome(req.Writer, http.StatusBadRequest, sdk.OutcomeClientError, jsonError("缺少有效的 task_id 参数")), nil
+		}
+		task, err = g.getHostTask(ctx, userID, taskID)
+	} else {
+		task, err = g.getHostTaskByPublicTaskID(ctx, userID, taskIDStr)
+	}
 	if err != nil {
 		return writeJSONOutcome(req.Writer, http.StatusInternalServerError, sdk.OutcomeUpstreamTransient, jsonError("查询任务失败: "+err.Error())), nil
 	}
 
 	respBody, _ := json.Marshal(handler.BuildResponse(task))
 	return writeJSONOutcome(req.Writer, http.StatusOK, sdk.OutcomeSuccess, respBody), nil
+}
+
+func imageTaskIDFromRequest(req *sdk.ForwardRequest) string {
+	if req == nil {
+		return ""
+	}
+	if qs := req.Headers.Get("X-Forwarded-Query"); qs != "" {
+		if values, err := url.ParseQuery(qs); err == nil {
+			if taskID := strings.TrimSpace(values.Get("task_id")); taskID != "" {
+				return taskID
+			}
+		}
+	}
+	if len(req.Body) == 0 {
+		return ""
+	}
+	var body map[string]any
+	if err := json.Unmarshal(req.Body, &body); err != nil {
+		return ""
+	}
+	return stringIDFromAny(body["task_id"])
 }
 
 func (g *OpenAIGateway) handleTaskList(ctx context.Context, req *sdk.ForwardRequest, handler TaskHandler) (sdk.ForwardOutcome, error) {
@@ -300,4 +337,28 @@ func isNumeric(s string) bool {
 		}
 	}
 	return len(s) > 0
+}
+
+func externalTaskID(task *sdk.HostTask) string {
+	if task == nil {
+		return ""
+	}
+	if task.PublicTaskID != "" {
+		return task.PublicTaskID
+	}
+	return strconv.FormatInt(task.ID, 10)
+}
+
+func stringIDFromAny(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v > 0 && v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	}
+	return ""
 }

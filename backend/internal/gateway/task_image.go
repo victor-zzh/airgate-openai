@@ -300,11 +300,15 @@ func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID 
 }
 
 func buildImageTaskResponse(task *sdk.HostTask) map[string]any {
+	taskID := externalTaskID(task)
 	resp := map[string]any{
-		"task_id":    task.ID,
+		"task_id":    taskID,
 		"status":     string(task.Status),
 		"progress":   task.Progress,
 		"created_at": task.CreatedAt,
+	}
+	if taskID != "" {
+		resp["status_url"] = imageTaskLocation("/v1/images/tasks", taskID)
 	}
 	if task.CompletedAt != nil {
 		resp["completed_at"] = *task.CompletedAt

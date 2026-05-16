@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
@@ -60,18 +62,23 @@ func (g *OpenAIGateway) hostInvoke(ctx context.Context, method string, payload m
 }
 
 func (g *OpenAIGateway) createHostTask(ctx context.Context, taskType string, userID int64, input map[string]interface{}, attributes map[string]string, priority, maxAttempts int) (*sdk.HostTask, error) {
+	publicTaskID, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("生成任务 UUIDv7 失败: %w", err)
+	}
 	payload := map[string]interface{}{
-		"plugin_id":    PluginID,
-		"task_type":    taskType,
-		"user_id":      userID,
-		"input":        input,
-		"priority":     priority,
-		"max_attempts": maxAttempts,
+		"plugin_id":       PluginID,
+		"task_type":       taskType,
+		"user_id":         userID,
+		"input":           input,
+		"priority":        priority,
+		"max_attempts":    maxAttempts,
+		"idempotency_key": publicTaskID.String(),
 	}
 	if len(attributes) > 0 {
 		payload["attributes"] = attributes
 	}
-	payload, err := g.hostInvoke(ctx, hostMethodTasksCreate, payload)
+	payload, err = g.hostInvoke(ctx, hostMethodTasksCreate, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +124,18 @@ func (g *OpenAIGateway) updateHostTask(ctx context.Context, taskID int64, status
 
 func (g *OpenAIGateway) getHostTask(ctx context.Context, userID, taskID int64) (*sdk.HostTask, error) {
 	payload, err := g.hostInvoke(ctx, hostMethodTasksGet, map[string]interface{}{"task_id": taskID, "user_id": userID})
+	if err != nil {
+		return nil, err
+	}
+	return hostTaskFromPayload(firstPayloadValue(payload, "task", "data", "result", ""))
+}
+
+func (g *OpenAIGateway) getHostTaskByPublicTaskID(ctx context.Context, userID int64, publicTaskID string) (*sdk.HostTask, error) {
+	payload, err := g.hostInvoke(ctx, hostMethodTasksGet, map[string]interface{}{
+		"plugin_id":      PluginID,
+		"public_task_id": publicTaskID,
+		"user_id":        userID,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +244,7 @@ func hostTaskFromPayload(value interface{}) (*sdk.HostTask, error) {
 	}
 	task := &sdk.HostTask{
 		ID:           int64FromAny(firstPayloadValue(m, "id", "task_id")),
+		PublicTaskID: publicTaskIDFromPayload(m),
 		PluginID:     stringFromAny(firstPayloadValue(m, "plugin_id")),
 		TaskType:     stringFromAny(firstPayloadValue(m, "task_type", "type")),
 		Status:       sdk.TaskStatus(stringFromAny(firstPayloadValue(m, "status"))),
@@ -242,6 +262,16 @@ func hostTaskFromPayload(value interface{}) (*sdk.HostTask, error) {
 	task.StartedAt = timePtrFromAny(firstPayloadValue(m, "started_at"))
 	task.CompletedAt = timePtrFromAny(firstPayloadValue(m, "completed_at"))
 	return task, nil
+}
+
+func publicTaskIDFromPayload(m map[string]interface{}) string {
+	if publicTaskID := stringFromAny(firstPayloadValue(m, "public_task_id", "idempotency_key")); publicTaskID != "" {
+		return publicTaskID
+	}
+	if taskID, ok := firstPayloadValue(m, "task_id").(string); ok {
+		return taskID
+	}
+	return ""
 }
 
 func headerPayload(headers http.Header) map[string]interface{} {
