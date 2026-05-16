@@ -67,13 +67,13 @@ func (g *OpenAIGateway) createHostTask(ctx context.Context, taskType string, use
 		return nil, fmt.Errorf("生成任务 UUIDv7 失败: %w", err)
 	}
 	payload := map[string]interface{}{
-		"plugin_id":       PluginID,
-		"task_type":       taskType,
-		"user_id":         userID,
-		"input":           input,
-		"priority":        priority,
-		"max_attempts":    maxAttempts,
-		"idempotency_key": publicTaskID.String(),
+		"plugin_id":      PluginID,
+		"task_type":      taskType,
+		"user_id":        userID,
+		"input":          input,
+		"priority":       priority,
+		"max_attempts":   maxAttempts,
+		"public_task_id": publicTaskID.String(),
 	}
 	if len(attributes) > 0 {
 		payload["attributes"] = attributes
