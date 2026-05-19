@@ -170,13 +170,9 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 
 	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false)
 	if err != nil {
-		if isSafetyRejectionText(err.Error()) {
-			return rt.Fail(ctx, &TaskError{
-				Type:    "invalid_request",
-				Code:    "safety_rejected",
-				Message: err.Error(),
-			})
-		}
+		// err 这里只来自 gRPC host-invoke 自身失败（断开 / 序列化错误），上游
+		// 4xx 安全拒绝走的是 resp.StatusCode + resp.Body，由下方 classifyUpstreamTaskError
+		// 处理。所以这里没必要再对 err.Error() 做 safety 关键词匹配。
 		return rt.Fail(ctx, &TaskError{
 			Type:      "upstream_error",
 			Message:   "upstream 转发失败: " + err.Error(),
@@ -270,14 +266,14 @@ func parseUpstreamTaskErrorBody(statusCode int, body []byte) (message, errType, 
 	}
 	if errObj, ok := errValue.(map[string]any); ok {
 		if v := strings.TrimSpace(stringFromAny(errObj["message"])); v != "" {
-			message = v
+			message = truncate(v, 500)
 		}
 		errType = strings.TrimSpace(stringFromAny(errObj["type"]))
 		errCode = strings.TrimSpace(stringFromAny(errObj["code"]))
 		return message, errType, errCode
 	}
 	if v := strings.TrimSpace(stringFromAny(errValue)); v != "" {
-		message = v
+		message = truncate(v, 500)
 	}
 	return message, "", ""
 }

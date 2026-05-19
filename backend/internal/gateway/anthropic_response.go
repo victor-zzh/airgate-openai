@@ -783,7 +783,7 @@ done:
 			if kind != sdk.OutcomeClientError {
 				kind = sdk.OutcomeStreamAborted
 			}
-			errBody := anthropicErrorJSON(failure.AnthropicErrorType, failure.Message)
+			errBody := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
 			return sdk.ForwardOutcome{
 				Kind:       kind,
 				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},

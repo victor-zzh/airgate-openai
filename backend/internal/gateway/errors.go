@@ -138,9 +138,18 @@ func anthropicErrorType(statusCode int) string {
 }
 
 func anthropicErrorJSON(errType, message string) []byte {
+	return anthropicErrorJSONWithCode(errType, "", message)
+}
+
+// anthropicErrorJSONWithCode 透传可机器读的 error.code（例如 safety_rejected）。
+// 仅当 code 非空时才输出该字段，避免影响既有不带 code 的回包。
+func anthropicErrorJSONWithCode(errType, code, message string) []byte {
 	out := `{"type":"error","error":{"type":"","message":""}}`
 	out, _ = sjson.Set(out, "error.type", errType)
 	out, _ = sjson.Set(out, "error.message", message)
+	if code != "" {
+		out, _ = sjson.Set(out, "error.code", code)
+	}
 	return []byte(out)
 }
 

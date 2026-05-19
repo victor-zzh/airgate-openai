@@ -248,24 +248,29 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 	}
 }
 
+// isSafetyRejectionText 用关键词组合识别"明确的安全拒绝"。
+// 关键设计：要求 "safety" 与显式拒绝动词（reject/block）共现，避免命中诸如
+// "follows our safety policy guidelines"、"please review the safety policy"
+// 这类提示性 400 文案。policy 一词单独出现不足以作为拒绝信号，必须与 violation
+// 或明确动词组合（见下面短语清单）。
 func isSafetyRejectionText(values ...string) bool {
 	text := strings.ToLower(strings.Join(values, " "))
 	if text == "" {
 		return false
 	}
 	if strings.Contains(text, "safety") &&
-		(strings.Contains(text, "reject") ||
-			strings.Contains(text, "block") ||
-			strings.Contains(text, "policy")) {
+		(strings.Contains(text, "reject") || strings.Contains(text, "block")) {
 		return true
 	}
 	for _, kw := range []string{
 		"content_policy",
-		"content policy",
+		"content policy violation",
 		"policy_violation",
 		"blocked by policy",
+		"blocked by our safety",
 		"moderation_blocked",
 		"moderation blocked",
+		"safety system",
 	} {
 		if strings.Contains(text, kw) {
 			return true

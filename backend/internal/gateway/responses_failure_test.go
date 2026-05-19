@@ -45,6 +45,36 @@ func TestClassifyResponsesFailureSafetyRejected(t *testing.T) {
 	}
 }
 
+// TestIsSafetyRejectionTextNearMisses 守住关键词收紧后的边界：
+// 提示性文案、把 policy 当名词解释的 400 不应被误判成"安全拒绝"。
+func TestIsSafetyRejectionTextNearMisses(t *testing.T) {
+	negatives := []string{
+		"please ensure your prompt follows our safety policy guidelines",
+		"see the safety policy for details",
+		"input violates the company policy",
+		"this field requires the safety token",
+		"",
+	}
+	for _, msg := range negatives {
+		if isSafetyRejectionText(msg) {
+			t.Fatalf("did not expect safety match for %q", msg)
+		}
+	}
+
+	positives := []string{
+		"Your request was rejected by the safety system",
+		"content_policy_violation",
+		"blocked by policy",
+		"prompt was blocked by our safety filter",
+		"moderation_blocked",
+	}
+	for _, msg := range positives {
+		if !isSafetyRejectionText(msg) {
+			t.Fatalf("expected safety match for %q", msg)
+		}
+	}
+}
+
 func TestClassifyResponsesFailureContinuationAnchor(t *testing.T) {
 	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}}`)
 	failure := classifyResponsesFailure(raw)

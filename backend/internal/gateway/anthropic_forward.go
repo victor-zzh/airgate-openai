@@ -492,7 +492,7 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {
-			body := anthropicErrorJSON(failure.AnthropicErrorType, failure.Message)
+			body := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
 			return sdk.ForwardOutcome{
 				Kind:       failure.outcomeKind(),
 				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
