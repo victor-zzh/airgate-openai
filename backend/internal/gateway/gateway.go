@@ -207,11 +207,25 @@ func (g *OpenAIGateway) validateAPIKeyViaResponses(ctx context.Context, account 
 const ReauthRequiredPrefix = "reauth_required: "
 
 // QueryQuota 查询账号额度
-// OAuth 账号：刷新 token 并从 id_token 中提取订阅信息；refresh_token 失效时降级解析存储的 access_token
+// OAuth 账号：优先用 refresh_token 刷新；refresh_token 为空但 session_token 存在
+// 时走 chatgpt.com session 端点刷新；两者都失败则降级解析存储的 access_token。
 // API Key 账号：不支持额度查询
 func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]string) (*quotaInfo, error) {
 	refreshToken := credentials["refresh_token"]
+	sessionToken := credentials["session_token"]
+	proxyURL := credentials["proxy_url"]
+
 	if refreshToken == "" {
+		// 没有 RT：优先尝试 session 端点刷新；失败再降级到存储的 access_token。
+		if sessionToken != "" {
+			if info, err := g.quotaInfoViaSession(ctx, sessionToken, credentials, proxyURL); err == nil {
+				return info, nil
+			} else if access := credentials["access_token"]; access != "" {
+				return g.quotaInfoFromAccessToken(ctx, access, credentials, "session_refresh_failed: "+err.Error())
+			} else {
+				return nil, fmt.Errorf("%ssession_token 刷新失败且无 access_token 可用 (原因: %s)", ReauthRequiredPrefix, err.Error())
+			}
+		}
 		if access := credentials["access_token"]; access != "" {
 			return g.quotaInfoFromAccessToken(ctx, access, credentials, "")
 		}
@@ -220,18 +234,21 @@ func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]s
 
 	// 用 refresh_token 换取新的 token 组，从中获取最新订阅状态
 	clientID := credentials["client_id"]
-	tokens, err := g.refreshTokens(ctx, refreshToken, credentials["proxy_url"], clientID)
+	tokens, err := g.refreshTokens(ctx, refreshToken, proxyURL, clientID)
 	if err != nil {
-		// refresh_token 失效，但只要 access_token 还在就降级使用它：
-		// access_token 是一个 JWT，不验签也能读 claims 拿到 plan_type / email /
-		// 订阅有效期；并且它本身也仍然可用于测试连接 / 拉 Codex usage 窗口等
-		// 只需 access_token 的操作（ProbeUsage 也走同一条路）。只有在连 access_token
-		// 都没有的情况下才视为彻底失效。
-		//
+		// refresh_token 失效，按优先级依次降级：
+		//   1. session_token 还在 → 走 chatgpt.com session 端点
+		//   2. access_token 还在 → 不验签解析 JWT claims（数据可能陈旧）
+		//   3. 都没有 → 视为彻底失效
 		// 历史上这里要求 claims 里必须有 plan_type 才降级，导致 JWT claims 被
 		// 精简（只含 sub / exp 等）的账号直接触发 ErrReauthRequired，前端弹出
 		// "需要重新授权"，其实账号还能正常服务请求。现在放宽：有 access_token
 		// 就成功返回，带上 refresh_warning 标记数据陈旧即可。
+		if sessionToken != "" {
+			if info, sessErr := g.quotaInfoViaSession(ctx, sessionToken, credentials, proxyURL); sessErr == nil {
+				return info, nil
+			}
+		}
 		if access := credentials["access_token"]; access != "" {
 			return g.quotaInfoFromAccessToken(ctx, access, credentials, "refresh_token_invalid: "+err.Error())
 		}
@@ -261,6 +278,54 @@ func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]s
 		extra["refresh_token"] = tokens.RefreshToken
 	}
 
+	return &quotaInfo{
+		ExpiresAt: info.SubscriptionActiveUntil,
+		Extra:     extra,
+	}, nil
+}
+
+// quotaInfoViaSession 走 chatgpt.com /api/auth/session 拉一份新 session，
+// 把 accessToken / session_token / 元信息回写到 extra，供调用方持久化。
+func (g *OpenAIGateway) quotaInfoViaSession(ctx context.Context, sessionToken string, credentials map[string]string, proxyURL string) (*quotaInfo, error) {
+	sess, err := g.refreshViaSession(ctx, sessionToken, proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	// 在 session 拿到的 AT 之上再做一次 enrichTokenInfo，把订阅有效期补全
+	// （session.expires 字段是 session 过期时间，不是订阅到期时间）。
+	info := g.enrichTokenInfo(ctx, parseTokenInfo("", sess.AccessToken), sess.AccessToken, proxyURL)
+	if info.Email == "" {
+		info.Email = sess.User.Email
+	}
+	if info.AccountID == "" {
+		info.AccountID = sess.Account.ID
+	}
+	if info.PlanType == "" {
+		info.PlanType = sess.Account.PlanType
+	}
+	if info.AccountName == "" {
+		if sess.User.Name != "" {
+			info.AccountName = sess.User.Name
+		} else {
+			info.AccountName = info.Email
+		}
+	}
+
+	extra := map[string]string{
+		"plan_type":                 info.PlanType,
+		"subscription_active_until": info.SubscriptionActiveUntil,
+		"access_token":              sess.AccessToken,
+		"session_token":             sess.SessionToken,
+	}
+	if info.AccountID != "" {
+		extra["chatgpt_account_id"] = info.AccountID
+	}
+	if info.AccountName != "" {
+		extra["account_name"] = info.AccountName
+	}
+	if info.Email != "" {
+		extra["email"] = info.Email
+	}
 	return &quotaInfo{
 		ExpiresAt: info.SubscriptionActiveUntil,
 		Extra:     extra,
@@ -718,6 +783,60 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 				continue
 			}
 			imported, err := g.ImportFromRefreshToken(context.Background(), rt, raw.ProxyURL, raw.ClientID)
+			if err != nil {
+				results = append(results, batchResult{Status: "failed", Error: err.Error()})
+				continue
+			}
+			results = append(results, batchResult{
+				Status:      "ok",
+				AccountType: imported.AccountType,
+				AccountName: imported.AccountName,
+				Credentials: imported.Credentials,
+			})
+		}
+		return http.StatusOK, nil, jsonMarshal(map[string]any{"results": results}), nil
+
+	case "oauth/import-session":
+		var raw struct {
+			Session  string `json:"session"`
+			ProxyURL string `json:"proxy_url"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil || strings.TrimSpace(raw.Session) == "" {
+			return http.StatusBadRequest, nil, jsonError("缺少 session 参数"), nil
+		}
+		result, err := g.ImportFromSessionJSON(context.Background(), raw.Session, raw.ProxyURL)
+		if err != nil {
+			return http.StatusInternalServerError, nil, jsonError(err.Error()), nil
+		}
+		return http.StatusOK, nil, jsonMarshal(map[string]any{
+			"account_type": result.AccountType,
+			"credentials":  result.Credentials,
+			"account_name": result.AccountName,
+		}), nil
+
+	case "oauth/batch-import-session":
+		var raw struct {
+			Sessions []string `json:"sessions"`
+			ProxyURL string   `json:"proxy_url"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil || len(raw.Sessions) == 0 {
+			return http.StatusBadRequest, nil, jsonError("缺少 sessions 参数"), nil
+		}
+
+		type batchResult struct {
+			AccountType string            `json:"account_type,omitempty"`
+			AccountName string            `json:"account_name,omitempty"`
+			Credentials map[string]string `json:"credentials,omitempty"`
+			Status      string            `json:"status"`
+			Error       string            `json:"error,omitempty"`
+		}
+
+		results := make([]batchResult, 0, len(raw.Sessions))
+		for _, s := range raw.Sessions {
+			if strings.TrimSpace(s) == "" {
+				continue
+			}
+			imported, err := g.ImportFromSessionJSON(context.Background(), s, raw.ProxyURL)
 			if err != nil {
 				results = append(results, batchResult{Status: "failed", Error: err.Error()})
 				continue

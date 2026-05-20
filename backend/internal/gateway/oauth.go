@@ -53,6 +53,11 @@ const (
 	oauthAuthEndpoint = "https://auth.openai.com/oauth/authorize"
 	oauthTokenURL     = "https://auth.openai.com/oauth/token"
 	accountsCheckURL  = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
+	// chatGPTSessionURL 是 chatgpt.com NextAuth 的 session 端点。
+	// 带上 __Secure-next-auth.session-token cookie 调用后返回包含新 accessToken
+	// 与（可能轮换的）sessionToken 的 JSON，与浏览器 /api/auth/session 一致。
+	chatGPTSessionURL    = "https://chatgpt.com/api/auth/session"
+	chatGPTSessionCookie = "__Secure-next-auth.session-token"
 
 	// OAuthCallbackPort codex 注册的固定回调端口，不可更改
 	OAuthCallbackPort = 1455
@@ -231,6 +236,158 @@ func (g *OpenAIGateway) ImportFromRefreshToken(ctx context.Context, refreshToken
 		AccountType: "oauth",
 		Credentials: credentials,
 		AccountName: info.AccountName,
+	}, nil
+}
+
+// sessionResponse 是 chatgpt.com /api/auth/session 端点的响应结构。
+// 同时也是用户从浏览器 DevTools 拷出来粘贴进来的 JSON 形态。
+// 字段顺序与字段名严格对齐上游，未列出的字段会被忽略。
+type sessionResponse struct {
+	User struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	} `json:"user"`
+	Expires string `json:"expires"`
+	Account struct {
+		ID       string `json:"id"`
+		PlanType string `json:"planType"`
+	} `json:"account"`
+	AccessToken  string `json:"accessToken"`
+	SessionToken string `json:"sessionToken"`
+	AuthProvider string `json:"authProvider"`
+}
+
+// parseSessionJSON 把用户粘贴的 JSON 解析成 sessionResponse。
+// 不带 accessToken 视为非法。
+func parseSessionJSON(raw string) (*sessionResponse, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("session JSON 不能为空")
+	}
+	if !strings.HasPrefix(raw, "{") {
+		return nil, fmt.Errorf("不是合法的 JSON 对象")
+	}
+	var sess sessionResponse
+	if err := json.Unmarshal([]byte(raw), &sess); err != nil {
+		return nil, fmt.Errorf("解析 session JSON 失败: %w", err)
+	}
+	if strings.TrimSpace(sess.AccessToken) == "" {
+		return nil, fmt.Errorf("session JSON 缺少 accessToken")
+	}
+	return &sess, nil
+}
+
+// refreshViaSession 调 chatgpt.com /api/auth/session 端点，
+// 用 sessionToken（JWE 形态的 __Secure-next-auth.session-token cookie）换回最新的
+// accessToken 与可能被轮换的 sessionToken。返回的 sessionResponse.SessionToken
+// 若为空字符串则表示上游未轮换，调用方应沿用原值。
+func (g *OpenAIGateway) refreshViaSession(ctx context.Context, sessionToken, proxyURL string) (*sessionResponse, error) {
+	sessionToken = strings.TrimSpace(sessionToken)
+	if sessionToken == "" {
+		return nil, fmt.Errorf("session_token 不能为空")
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, chatGPTSessionURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "*/*")
+	httpReq.Header.Set("Referer", "https://chatgpt.com/")
+	httpReq.Header.Set("User-Agent", chatGPTBrowserUserAgent)
+	httpReq.AddCookie(&http.Cookie{Name: chatGPTSessionCookie, Value: sessionToken})
+
+	client := g.buildHTTPClient(&sdk.Account{ProxyURL: proxyURL})
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("请求 session 端点失败: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取 session 响应失败: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("session 端点返回 %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	var sess sessionResponse
+	if err := json.Unmarshal(body, &sess); err != nil {
+		return nil, fmt.Errorf("解析 session 响应失败: %w", err)
+	}
+	if strings.TrimSpace(sess.AccessToken) == "" {
+		// 上游通常会返回 {} 表示 sessionToken 已失效
+		return nil, fmt.Errorf("session 端点未返回 accessToken（session_token 可能已失效）")
+	}
+	// 上游若未轮换 sessionToken 会省略字段，沿用原值
+	if strings.TrimSpace(sess.SessionToken) == "" {
+		sess.SessionToken = sessionToken
+	}
+	return &sess, nil
+}
+
+// credentialsFromSession 把 sessionResponse 转成与 OAuth 浏览器/RT 导入一致的 credentials map。
+// 不写入 refresh_token —— session 路径下用户可能就是没 RT。
+func credentialsFromSession(sess *sessionResponse) (map[string]string, string) {
+	creds := map[string]string{
+		"access_token":  sess.AccessToken,
+		"session_token": sess.SessionToken,
+	}
+	if sess.Account.ID != "" {
+		creds["chatgpt_account_id"] = sess.Account.ID
+	}
+	if sess.User.Email != "" {
+		creds["email"] = sess.User.Email
+	}
+	if sess.Account.PlanType != "" {
+		creds["plan_type"] = sess.Account.PlanType
+	}
+	if sess.Expires != "" {
+		creds["subscription_active_until"] = sess.Expires
+	}
+	name := sess.User.Name
+	if name == "" {
+		name = sess.User.Email
+	}
+	return creds, name
+}
+
+// ImportFromSessionJSON 接受用户粘贴的 chatgpt.com /api/auth/session JSON 或裸 sessionToken，
+// 直接解析出 credentials —— **零网络调用是首选路径**，因为 JSON 自带新鲜的 accessToken。
+// 仅在输入不是 JSON 时退化为 sessionToken 字符串，调一次 session 端点拉回完整 session。
+func (g *OpenAIGateway) ImportFromSessionJSON(ctx context.Context, raw, proxyURL string) (*OAuthResult, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("session 输入不能为空")
+	}
+
+	sess, err := parseSessionJSON(raw)
+	if err != nil {
+		// 退化路径：把整个输入当 sessionToken 处理
+		if strings.HasPrefix(raw, "{") {
+			// 是 JSON 但解析失败/缺 AT —— 直接报错，不要再当 sessionToken
+			return nil, err
+		}
+		refreshed, refreshErr := g.refreshViaSession(ctx, raw, proxyURL)
+		if refreshErr != nil {
+			return nil, fmt.Errorf("既不是合法的 session JSON，也无法当作 session_token 刷新: %w", refreshErr)
+		}
+		sess = refreshed
+	}
+
+	credentials, accountName := credentialsFromSession(sess)
+
+	g.logger.Info("oauth_session_imported",
+		"account_name", accountName,
+		sdk.LogFieldAccountID, sess.Account.ID,
+		"plan_type", sess.Account.PlanType,
+	)
+
+	return &OAuthResult{
+		AccountType: "oauth",
+		Credentials: credentials,
+		AccountName: accountName,
 	}, nil
 }
 

@@ -245,6 +245,11 @@ gateway:
           type: password
           required: false
           placeholder: 授权后自动填充
+        - key: session_token
+          label: Session Token (JWE)
+          type: password
+          required: false
+          placeholder: Session 导入后自动填充
         - key: chatgpt_account_id
           label: ChatGPT Account ID
           type: text

@@ -4,10 +4,19 @@ import type {
   AccountFormProps,
   PluginBatchAccountInput,
   PluginOAuthBatchExchangeResult,
+  PluginOAuthBridge,
+  PluginOAuthExchangeResult,
 } from '@doudou-start/airgate-theme/plugin';
 
 type BatchExchangeResult = PluginOAuthBatchExchangeResult;
 type BatchAccountInput = PluginBatchAccountInput;
+
+// Session 导入能力暂未沉淀进 SDK，先在插件本地扩展 bridge 类型。
+// Core v0.2.6+ 注入对应的实现；老版本 Core 下两个字段为 undefined，UI 自动隐藏 pill。
+type OAuthBridgeWithSession = PluginOAuthBridge & {
+  importSession?: (session: string) => Promise<PluginOAuthExchangeResult>;
+  batchImportSession?: (sessions: string[]) => Promise<PluginOAuthBatchExchangeResult[]>;
+};
 
 /** 订阅计划显示名称和颜色映射 */
 const planDisplayMap: Record<string, { label: string; color: string; bg: string }> = {
@@ -99,8 +108,25 @@ const pillActiveStyle: React.CSSProperties = {
 
 type AccountType = 'apikey' | 'oauth';
 
+/** parseSessionLines —— 批量 session 输入解析：支持两种格式混合
+ *  1) 每行一个完整的 /api/auth/session JSON（必须是单行 JSON）
+ *  2) 每行一个裸 sessionToken（JWE 串）
+ *  # 开头视为注释行。整个 textarea 也可以贴一个多行 JSON——会被合并为一项。
+ */
+function parseSessionLines(text: string): string[] {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    // 用户粘了一个跨行的 JSON——视作单条
+    return [trimmed];
+  }
+  return trimmed
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+}
+
 /** OAuth 导入模式：浏览器授权 / 单个 Refresh Token / 批量 Refresh Token */
-type OAuthMode = 'browser' | 'refresh_single' | 'refresh_batch';
+type OAuthMode = 'browser' | 'refresh_single' | 'refresh_batch' | 'session_single' | 'session_batch';
 type RefreshTokenImportType = 'codex' | 'mobile';
 
 const mobileRefreshTokenClientID = 'app_LlGpXReQgckcGGUo2JrYvtJK';
@@ -174,6 +200,8 @@ export function AccountForm({
   const [callbackURL, setCallbackURL] = useState('');
   const [refreshTokenInput, setRefreshTokenInput] = useState('');
   const [refreshTokenImportType, setRefreshTokenImportType] = useState<RefreshTokenImportType>('codex');
+  const [sessionInput, setSessionInput] = useState('');
+  const [sessionBatchText, setSessionBatchText] = useState('');
   const [batchText, setBatchText] = useState('');
   const [batchPhase, setBatchPhase] = useState<'input' | 'running' | 'result'>('input');
   const [batchResults, setBatchResults] = useState<BatchExchangeResult[]>([]);
@@ -181,9 +209,13 @@ export function AccountForm({
   const [oauthLoading, setOAuthLoading] = useState(false);
   const [oauthStatus, setOAuthStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
   const accountType = (propType as AccountType | undefined) ?? localType;
+  const oauthExt = oauth as OAuthBridgeWithSession | undefined;
 
   // 进入/退出批量模式时通知外层隐藏"下一步/创建"按钮
-  const isBatchActive = mode === 'create' && accountType === 'oauth' && oauthMode === 'refresh_batch';
+  const isBatchActive =
+    mode === 'create' &&
+    accountType === 'oauth' &&
+    (oauthMode === 'refresh_batch' || oauthMode === 'session_batch');
   useEffect(() => {
     onBatchModeChange?.(isBatchActive);
   }, [isBatchActive, onBatchModeChange]);
@@ -198,6 +230,7 @@ export function AccountForm({
   const planType = credentials.plan_type || jwtInfo?.planType || '';
   const subscriptionUntil = credentials.subscription_active_until || jwtInfo?.subscriptionUntil || '';
   const batchRefreshTokens = useMemo(() => parseRefreshTokenLines(batchText), [batchText]);
+  const batchSessionItems = useMemo(() => parseSessionLines(sessionBatchText), [sessionBatchText]);
 
   const updateField = useCallback(
     (key: string, value: string) => {
@@ -216,6 +249,8 @@ export function AccountForm({
       setOauthMode('browser');
       setRefreshTokenInput('');
       setRefreshTokenImportType('codex');
+      setSessionInput('');
+      setSessionBatchText('');
       setBatchText('');
       setBatchPhase('input');
       setBatchResults([]);
@@ -224,7 +259,7 @@ export function AccountForm({
       if (type === 'apikey') {
         onChange({ api_key: '', base_url: baseUrl, provider: '' });
       } else {
-        onChange({ access_token: '', refresh_token: '', chatgpt_account_id: '', base_url: baseUrl, provider: '' });
+        onChange({ access_token: '', refresh_token: '', session_token: '', chatgpt_account_id: '', base_url: baseUrl, provider: '' });
       }
     },
     [credentials.base_url, onChange, onAccountTypeChange],
@@ -329,8 +364,65 @@ export function AccountForm({
     }
   }, [batchRefreshTokens, refreshTokenImportType, oauth, onBatchImport]);
 
+  const submitSessionImport = useCallback(async () => {
+    if (!oauthExt?.importSession || !sessionInput.trim()) return;
+    setOAuthLoading(true);
+    setOAuthStatus({ type: 'info', text: '正在解析 session 并导入...' });
+    try {
+      const result = await oauthExt.importSession(sessionInput.trim());
+      onAccountTypeChange?.(result.accountType || 'oauth');
+      onChange({ ...credentials, ...result.credentials });
+      if (result.accountName) {
+        onSuggestedName?.(result.accountName);
+      }
+      setOAuthStatus({ type: 'success', text: '导入成功，凭证已自动填充。' });
+      setSessionInput('');
+    } catch (error) {
+      setOAuthStatus({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Session 导入失败',
+      });
+    } finally {
+      setOAuthLoading(false);
+    }
+  }, [oauthExt, sessionInput, onAccountTypeChange, onChange, credentials, onSuggestedName]);
+
+  const submitBatchSessionImport = useCallback(async () => {
+    if (!oauthExt?.batchImportSession || !onBatchImport) {
+      setOAuthStatus({ type: 'error', text: '当前环境不支持批量导入' });
+      return;
+    }
+    const sessions = batchSessionItems;
+    if (sessions.length === 0) {
+      setOAuthStatus({ type: 'error', text: '请至少粘贴一个 session JSON 或 sessionToken（每行一个）' });
+      return;
+    }
+    setBatchPhase('running');
+    setOAuthStatus({ type: 'info', text: `正在批量解析 ${sessions.length} 个 session...` });
+    try {
+      const results = await oauthExt.batchImportSession(sessions);
+      setBatchResults(results);
+      const successItems = results.filter((r) => r.status === 'ok' && r.credentials);
+      if (successItems.length > 0) {
+        const accounts: BatchAccountInput[] = successItems.map((r) => ({
+          name: r.accountName || r.credentials.email || 'OpenAI Session',
+          type: r.accountType || 'oauth',
+          credentials: r.credentials,
+        }));
+        const importResp = await onBatchImport(accounts);
+        setBatchImportedCount(importResp.imported);
+      }
+      setBatchPhase('result');
+      setOAuthStatus(null);
+    } catch (err) {
+      setBatchPhase('input');
+      setOAuthStatus({ type: 'error', text: err instanceof Error ? err.message : '批量导入失败' });
+    }
+  }, [batchSessionItems, oauthExt, onBatchImport]);
+
   const resetBatch = useCallback(() => {
     setBatchText('');
+    setSessionBatchText('');
     setRefreshTokenImportType('codex');
     setBatchPhase('input');
     setBatchResults([]);
@@ -446,7 +538,7 @@ export function AccountForm({
             onClick={mode === 'create' ? () => handleTypeChange('oauth') : undefined}
           >
             <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>OAuth 登录</div>
-            <div style={descStyle}>支持浏览器授权 / Refresh Token 导入</div>
+            <div style={descStyle}>支持浏览器授权 / Refresh Token / Session 导入</div>
           </div>
         </div>
       </div>
@@ -551,7 +643,23 @@ export function AccountForm({
                     style={oauthMode === 'refresh_batch' ? pillActiveStyle : pillStyle}
                     onClick={() => setOauthMode('refresh_batch')}
                   >
-                    批量导入
+                    RT 批量导入
+                  </span>
+                )}
+                {oauthExt?.importSession && (
+                  <span
+                    style={oauthMode === 'session_single' ? pillActiveStyle : pillStyle}
+                    onClick={() => setOauthMode('session_single')}
+                  >
+                    Session 导入
+                  </span>
+                )}
+                {oauthExt?.batchImportSession && onBatchImport && (
+                  <span
+                    style={oauthMode === 'session_batch' ? pillActiveStyle : pillStyle}
+                    onClick={() => setOauthMode('session_batch')}
+                  >
+                    Session 批量导入
                   </span>
                 )}
               </div>
@@ -707,6 +815,113 @@ export function AccountForm({
                   )}
                 </>
               )}
+
+              {oauthMode === 'session_single' && (
+                <>
+                  <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
+                    粘贴 chatgpt.com 的 /api/auth/session 完整 JSON，或仅 sessionToken（JWE 串）。
+                    JSON 路径零网络调用，直接解析后入库；仅传 sessionToken 时会调一次 session 端点拉完整信息。
+                  </div>
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <label style={labelStyle}>Session JSON 或 sessionToken</label>
+                    <textarea
+                      style={{ ...inputStyle, minHeight: '160px', resize: 'vertical', fontFamily: 'monospace' }}
+                      placeholder={'{\n  "user": {...},\n  "accessToken": "eyJhbGciOi...",\n  "sessionToken": "eyJhbGciOiJkaXIi..."\n}'}
+                      value={sessionInput}
+                      onChange={(e) => setSessionInput(e.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={submitSessionImport}
+                      disabled={!sessionInput.trim() || oauthLoading}
+                      style={primaryBtnStyle(!sessionInput.trim() || oauthLoading)}
+                    >
+                      导入
+                    </button>
+                    <StatusMessage status={oauthStatus} />
+                  </div>
+                </>
+              )}
+
+              {oauthMode === 'session_batch' && (
+                <>
+                  {batchPhase === 'input' && (
+                    <>
+                      <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
+                        每行一个 session JSON（单行）或一个 sessionToken。
+                        如果你想贴一个跨行的 JSON，直接粘进去也行——会被识别为单条。# 开头视为注释。
+                      </div>
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <label style={labelStyle}>Sessions</label>
+                        <textarea
+                          style={{ ...inputStyle, minHeight: '220px', resize: 'vertical', fontFamily: 'monospace' }}
+                          placeholder={'每行一个 sessionToken 或一行一个完整 JSON\n# 以 # 开头的行会被忽略'}
+                          value={sessionBatchText}
+                          onChange={(e) => setSessionBatchText(e.target.value)}
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={submitBatchSessionImport}
+                          disabled={batchSessionItems.length === 0}
+                          style={primaryBtnStyle(batchSessionItems.length === 0)}
+                        >
+                          批量导入 ({batchSessionItems.length})
+                        </button>
+                        <StatusMessage status={oauthStatus} />
+                      </div>
+                    </>
+                  )}
+
+                  {batchPhase === 'running' && (
+                    <div style={{ fontSize: '0.875rem', color: cssVar('textSecondary') }}>
+                      正在解析并导入，请稍候...
+                    </div>
+                  )}
+
+                  {batchPhase === 'result' && (
+                    <>
+                      <div style={{ fontSize: '0.875rem', color: cssVar('text'), marginBottom: '0.75rem' }}>
+                        共 {batchResults.length} 个，成功 {batchImportedCount} 个，失败 {batchResults.filter((r) => r.status === 'failed').length} 个
+                      </div>
+                      <div style={{
+                        maxHeight: '280px',
+                        overflowY: 'auto',
+                        borderWidth: '1px',
+                        borderStyle: 'solid',
+                        borderColor: cssVar('border'),
+                        borderRadius: cssVar('radiusMd'),
+                        padding: '0.5rem 0.75rem',
+                        marginBottom: '0.75rem',
+                      }}>
+                        {batchResults.map((r, idx) => (
+                          <div key={idx} style={{
+                            fontSize: '0.75rem',
+                            padding: '0.375rem 0',
+                            borderBottom: idx < batchResults.length - 1 ? `1px solid ${cssVar('border')}` : 'none',
+                            color: r.status === 'ok' ? cssVar('success') : cssVar('danger'),
+                          }}>
+                            <span style={{ fontWeight: 500 }}>
+                              [{r.status === 'ok' ? '成功' : '失败'}]
+                            </span>{' '}
+                            {r.status === 'ok'
+                              ? (r.accountName || r.credentials.email || '未知账号')
+                              : (r.error || '未知错误')}
+                          </div>
+                        ))}
+                      </div>
+                      <button type="button" onClick={resetBatch} style={ghostBtnStyle(false)}>
+                        再导入一批
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
             </div>
           )}
 
@@ -738,6 +953,17 @@ export function AccountForm({
                 />
               </div>
               <div>
+                <label style={labelStyle}>Session Token (JWE)</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={passwordInputStyle}
+                  placeholder="Session 导入后自动填充，或手动粘贴"
+                  value={credentials.session_token ?? ''}
+                  onChange={(e) => updateField('session_token', e.target.value)}
+                />
+              </div>
+              <div>
                 <label style={labelStyle}>Client ID</label>
                 <input
                   type="text"
@@ -761,19 +987,32 @@ export function AccountForm({
             </>
           )}
 
-          {/* 编辑模式下显示 Refresh Token，可查看和修改 */}
+          {/* 编辑模式下显示 Refresh Token / Session Token，可查看和修改 */}
           {mode === 'edit' && (
-            <div>
-              <label style={labelStyle}>Refresh Token</label>
-              <input
-                type="text"
-                autoComplete="off"
-                style={passwordInputStyle}
-                placeholder="未设置"
-                value={credentials.refresh_token ?? ''}
-                onChange={(e) => updateField('refresh_token', e.target.value)}
-              />
-            </div>
+            <>
+              <div>
+                <label style={labelStyle}>Refresh Token</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={passwordInputStyle}
+                  placeholder="未设置"
+                  value={credentials.refresh_token ?? ''}
+                  onChange={(e) => updateField('refresh_token', e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>Session Token (JWE)</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={passwordInputStyle}
+                  placeholder="未设置"
+                  value={credentials.session_token ?? ''}
+                  onChange={(e) => updateField('session_token', e.target.value)}
+                />
+              </div>
+            </>
           )}
         </>
       )}
