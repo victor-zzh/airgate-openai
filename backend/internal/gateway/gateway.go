@@ -114,7 +114,39 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		sdk.LogFieldModel, req.Model,
 		"stream", req.Stream,
 	)
+
+	// 诊断：Info 级别打印代理状态，让运维 / 开发者直观确认绑定代理是否到了插件这一层。
+	// proxy_target 已 redact 掉 user:pass，仅保留 protocol://host:port。
+	accountID := int64(0)
+	if req.Account != nil {
+		accountID = req.Account.ID
+	}
+	proxyURL := ""
+	if req.Account != nil {
+		proxyURL = req.Account.ProxyURL
+	}
+	logger.Info("forward_proxy_resolved",
+		sdk.LogFieldAccountID, accountID,
+		sdk.LogFieldModel, req.Model,
+		"via_proxy", proxyURL != "",
+		"proxy_target", redactProxyURL(proxyURL),
+	)
+
 	return g.forwardHTTP(ctx, req)
+}
+
+// redactProxyURL 去掉 proxy URL 中的 user:pass，避免日志泄露代理凭证。
+// 解析失败时返回 "<invalid>"，空串返回空串。
+func redactProxyURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid>"
+	}
+	u.User = nil
+	return u.String()
 }
 
 // ValidateAccount 验证凭证有效性
