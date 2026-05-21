@@ -485,9 +485,6 @@ func mergeCodexWindowFields(
 	existingWindowMinutes int,
 	existingCapturedAt time.Time,
 ) {
-	if nextUsed == nil || nextReset == nil || nextWindowMinutes == nil {
-		return
-	}
 	nextHasData := hasCodexWindowData(*nextUsed, *nextReset, *nextWindowMinutes)
 	existingHasData := hasCodexWindowData(existingUsed, existingReset, existingWindowMinutes)
 	if !nextHasData {
@@ -503,7 +500,7 @@ func mergeCodexWindowFields(
 		*nextWindowMinutes = existingWindowMinutes
 		return
 	}
-	if nextWindowMinutes != nil && *nextWindowMinutes <= 0 && existingWindowMinutes > 0 {
+	if *nextWindowMinutes <= 0 && existingWindowMinutes > 0 {
 		*nextWindowMinutes = existingWindowMinutes
 	}
 	if *nextReset > 0 || existingReset <= 0 {
