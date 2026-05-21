@@ -200,7 +200,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 		return err
 	}
 
-	content, err := storeImageAssetsFromResponse(ctx, g, task.UserID, resp.Body)
+	content, objectKeys, err := storeImageAssetsFromResponse(ctx, g, task.UserID, resp.Body)
 	if err != nil {
 		rt.logger.Warn("store_image_assets_failed", "error", err, "body_len", len(resp.Body))
 		return rt.Fail(ctx, &TaskError{
@@ -218,6 +218,9 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 
 	output := map[string]any{
 		"content": content,
+	}
+	if len(objectKeys) > 0 {
+		output["asset_object_keys"] = objectKeys
 	}
 	if resp.Usage != nil {
 		output["model"] = resp.Usage.Model
@@ -289,9 +292,10 @@ func parseUpstreamTaskErrorBody(statusCode int, body []byte) (message, errType, 
 	return message, "", ""
 }
 
-// storeImageAssetsFromResponse 解析 OpenAI Images API 响应，把图片存到 Core 资产存储，
-// 返回 markdown 格式的本地 URL（如 "![image](/assets-runtime/...)\n"）。
-func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID int64, body []byte) (string, error) {
+// storeImageAssetsFromResponse 解析 OpenAI Images API 响应，把图片存到 Core 资产存储。
+// 返回的 content 是 markdown 格式的本地 URL（如 "![image](/assets-runtime/...)\n"），
+// objectKeys 则用于任务删除时精确回收对应对象。
+func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID int64, body []byte) (string, []string, error) {
 	var resp struct {
 		Data []struct {
 			B64JSON       string `json:"b64_json"`
@@ -300,17 +304,18 @@ func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID 
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("parse images response: %w", err)
+		return "", nil, fmt.Errorf("parse images response: %w", err)
 	}
 	if len(resp.Data) == 0 {
-		return "", fmt.Errorf("response data array is empty (body length=%d)", len(body))
+		return "", nil, fmt.Errorf("response data array is empty (body length=%d)", len(body))
 	}
 
 	logger := sdk.LoggerFromContext(ctx)
-	scope := fmt.Sprintf("openai/images/user-%d", userID)
+	purpose := "generated"
 	var sb strings.Builder
+	var objectKeys []string
 	for i, item := range resp.Data {
-		var localURL string
+		var stored *storedAssetRef
 		var err error
 		switch {
 		case item.B64JSON != "":
@@ -319,12 +324,12 @@ func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID 
 				logger.Warn("store_image_b64_decode_failed", "index", i, "error", decErr)
 				continue
 			}
-			localURL, err = g.storeAsset(ctx, userID, scope, "image/png", ".png", data)
+			stored, err = g.storeAsset(ctx, userID, purpose, "image/png", ".png", data)
 			if err != nil {
 				logger.Warn("store_image_asset_failed", "index", i, "b64_len", len(item.B64JSON), "error", err)
 			}
 		case item.URL != "" && (strings.HasPrefix(item.URL, "http://") || strings.HasPrefix(item.URL, "https://")):
-			localURL, err = g.storeAssetFromURL(ctx, userID, scope, item.URL)
+			stored, err = g.storeAssetFromURL(ctx, userID, purpose, item.URL)
 			if err != nil {
 				logger.Warn("store_image_from_url_failed", "index", i, "error", err)
 			}
@@ -333,12 +338,15 @@ func storeImageAssetsFromResponse(ctx context.Context, g *OpenAIGateway, userID 
 				"has_b64", item.B64JSON != "", "has_url", item.URL != "")
 			continue
 		}
-		if err != nil || localURL == "" {
+		if err != nil || stored == nil || stored.PublicURL == "" {
 			continue
 		}
-		fmt.Fprintf(&sb, "![image](%s)\n", localURL)
+		if stored.ObjectKey != "" {
+			objectKeys = append(objectKeys, stored.ObjectKey)
+		}
+		fmt.Fprintf(&sb, "![image](%s)\n", stored.PublicURL)
 	}
-	return strings.TrimSpace(sb.String()), nil
+	return strings.TrimSpace(sb.String()), objectKeys, nil
 }
 
 func buildImageTaskResponse(task *sdk.HostTask) map[string]any {

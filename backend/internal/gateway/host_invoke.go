@@ -39,6 +39,11 @@ type hostTaskListResponse struct {
 	Total int
 }
 
+type storedAssetRef struct {
+	PublicURL string
+	ObjectKey string
+}
+
 func (g *OpenAIGateway) hostInvoke(ctx context.Context, method string, payload map[string]interface{}) (map[string]interface{}, error) {
 	if g.host == nil {
 		return nil, fmt.Errorf("core host 未启用")
@@ -197,18 +202,21 @@ func (g *OpenAIGateway) forwardViaHost(ctx context.Context, userID, groupID, api
 	}, nil
 }
 
-func (g *OpenAIGateway) storeAsset(ctx context.Context, userID int64, scope, contentType, fileExtension string, data []byte) (string, error) {
+func (g *OpenAIGateway) storeAsset(ctx context.Context, userID int64, purpose, contentType, fileExtension string, data []byte) (*storedAssetRef, error) {
 	payload, err := g.hostInvoke(ctx, hostMethodAssetsStore, map[string]interface{}{
 		"user_id":        userID,
-		"scope":          scope,
+		"purpose":        purpose,
 		"content_type":   contentType,
 		"file_extension": fileExtension,
 		"data":           data,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return stringFromAny(firstPayloadValue(payload, "public_url")), nil
+	return &storedAssetRef{
+		PublicURL: stringFromAny(firstPayloadValue(payload, "public_url")),
+		ObjectKey: stringFromAny(firstPayloadValue(payload, "object_key")),
+	}, nil
 }
 
 // fetchAssetBytes 通过 core 的 assets.get_bytes host method 按 objectKey 拉取
@@ -237,16 +245,19 @@ func (g *OpenAIGateway) fetchAssetBytes(ctx context.Context, objectKey string) (
 	}
 }
 
-func (g *OpenAIGateway) storeAssetFromURL(ctx context.Context, userID int64, scope, sourceURL string) (string, error) {
+func (g *OpenAIGateway) storeAssetFromURL(ctx context.Context, userID int64, purpose, sourceURL string) (*storedAssetRef, error) {
 	payload, err := g.hostInvoke(ctx, hostMethodAssetsStoreURL, map[string]interface{}{
 		"user_id":    userID,
-		"scope":      scope,
+		"purpose":    purpose,
 		"source_url": sourceURL,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return stringFromAny(firstPayloadValue(payload, "public_url")), nil
+	return &storedAssetRef{
+		PublicURL: stringFromAny(firstPayloadValue(payload, "public_url")),
+		ObjectKey: stringFromAny(firstPayloadValue(payload, "object_key")),
+	}, nil
 }
 
 func firstPayloadValue(payload map[string]interface{}, keys ...string) interface{} {

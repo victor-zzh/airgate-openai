@@ -18,8 +18,8 @@ func TestObjectKeyFromRuntimeAssetURL(t *testing.T) {
 	}{
 		{
 			name: "simple",
-			url:  "/assets-runtime/gateway-openai/task-inputs/user-42/abcdef.png",
-			want: "gateway-openai/task-inputs/user-42/abcdef.png",
+			url:  "/assets-runtime/task-input/42/202605/abcdef.png",
+			want: "task-input/42/202605/abcdef.png",
 		},
 		{
 			name: "escaped segment",
@@ -28,8 +28,8 @@ func TestObjectKeyFromRuntimeAssetURL(t *testing.T) {
 		},
 		{
 			name: "with query string (thumbnail)",
-			url:  "/assets-runtime/gateway-openai/task-inputs/user-1/x.png?w=256",
-			want: "gateway-openai/task-inputs/user-1/x.png",
+			url:  "/assets-runtime/task-input/1/202605/x.png?w=256",
+			want: "task-input/1/202605/x.png",
 		},
 	}
 	for _, tc := range cases {
@@ -93,7 +93,7 @@ func (f *fakeHost) InvokeStream(ctx context.Context, req sdk.HostStreamRequest) 
 }
 
 func TestResolveTaskInputAssets_ReplacesRuntimeURLs(t *testing.T) {
-	const key = "gateway-openai/task-inputs/user-42/abc.png"
+	const key = "task-input/42/202605/abc.png"
 	imgBytes := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 	g := &OpenAIGateway{host: &fakeHost{
 		bytesByKey: map[string][]byte{key: imgBytes},
