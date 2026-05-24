@@ -734,28 +734,6 @@ func buildEditRegionAnnotation(req *imagesRequest) (string, error) {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-func decodeDataURLImage(ref string) (image.Image, error) {
-	if !strings.HasPrefix(ref, "data:") {
-		return nil, fmt.Errorf("仅支持 data URL 图片")
-	}
-	commaIdx := strings.Index(ref, ",")
-	if commaIdx < 0 {
-		return nil, fmt.Errorf("data URL 缺少 base64 数据")
-	}
-	data, err := base64.StdEncoding.DecodeString(ref[commaIdx+1:])
-	if err != nil {
-		data, err = base64.RawStdEncoding.DecodeString(ref[commaIdx+1:])
-		if err != nil {
-			return nil, err
-		}
-	}
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	return img, nil
-}
-
 func whiteCanvas(width, height int) image.Image {
 	if width <= 0 || height <= 0 {
 		width, height = 1024, 1024
