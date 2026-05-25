@@ -317,6 +317,30 @@ func TestNormalizeResponsesInputPreservesChatImageURL(t *testing.T) {
 	}
 }
 
+func TestPreprocessRequestBody_ForcesResponsesStoreFalse(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "responses input",
+			body: []byte(`{"model":"gpt-5.4","input":"hi","store":true}`),
+		},
+		{
+			name: "responses messages",
+			body: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"store":true}`),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := preprocessRequestBody(tc.body, "gpt-5.4", "/v1/responses")
+			if store := gjson.GetBytes(got, "store"); !store.Exists() || store.Bool() {
+				t.Fatalf("store = %v, want false; body=%s", store.Value(), got)
+			}
+		})
+	}
+}
+
 func TestFirstNonEmptyTier_RequestFastFallsBackToUpstreamPriority(t *testing.T) {
 	if got := firstNonEmptyTier("fast", "priority"); got != "priority" {
 		t.Fatalf("firstNonEmptyTier(fast, priority) = %q, want %q", got, "priority")

@@ -199,6 +199,7 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  3. 剔除客户端 previous_response_id（跨账号接续不可靠，会话接续由网关内部管理）
 //  4. 上下文守卫（/v1/chat/completions 超长 messages 裁剪）
 //  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
+//  6. Responses API 强制禁用上游存储（store=false）
 func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 	if len(body) == 0 {
 		return body
@@ -232,6 +233,7 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 
 	result = applyContextGuard(result, reqPath)
 	result = normalizeResponsesInput(result, reqPath)
+	result = forceResponsesStoreFalse(result, reqPath)
 	return result
 }
 
@@ -300,7 +302,7 @@ func shrinkDataImageURLsValue(v any, limit int, changed *bool) any {
 // /v1/responses，本函数把 messages 翻译成 Responses API 的 input 列表（复用
 // convertChatMessagesToResponsesInput）。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
-	if !strings.Contains(reqPath, "/v1/responses") && !strings.HasSuffix(reqPath, "/responses") {
+	if !isResponsesRequestPath(reqPath) {
 		return body
 	}
 
@@ -355,6 +357,20 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 		}
 	}
 
+	return body
+}
+
+func isResponsesRequestPath(reqPath string) bool {
+	return strings.Contains(reqPath, "/v1/responses") || strings.HasSuffix(reqPath, "/responses")
+}
+
+func forceResponsesStoreFalse(body []byte, reqPath string) []byte {
+	if len(body) == 0 || !isResponsesRequestPath(reqPath) {
+		return body
+	}
+	if modified, err := sjson.SetBytes(body, "store", false); err == nil {
+		return modified
+	}
 	return body
 }
 
