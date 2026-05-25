@@ -180,7 +180,7 @@ func TestApplyOpenAIWireServiceTier_FastRemoved(t *testing.T) {
 	}
 }
 
-func TestPreprocessRequestBody_ShrinksConversationImageDataURLs(t *testing.T) {
+func TestPreprocessRequestBody_PreservesConversationImageDataURLs(t *testing.T) {
 	imageRef := largeConversationImageDataURL(t)
 	cases := []struct {
 		name       string
@@ -204,11 +204,9 @@ func TestPreprocessRequestBody_ShrinksConversationImageDataURLs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := preprocessRequestBody(tc.body, "gpt-5.4", tc.path)
-			shrunk := gjson.GetBytes(got, tc.resultPath).String()
-			if shrunk == "" {
-				t.Fatalf("压缩后的 image_url 为空，body=%s", got)
+			if gotImage := gjson.GetBytes(got, tc.resultPath).String(); gotImage != imageRef {
+				t.Fatalf("conversation image should stay unchanged, got %.32q", gotImage)
 			}
-			assertShrunkConversationImage(t, shrunk, imageRef)
 		})
 	}
 }
@@ -231,19 +229,6 @@ func largeConversationImageDataURL(t *testing.T) string {
 		t.Fatalf("测试图片过小：%d <= %d", n, maxResponsesInputImageBytes)
 	}
 	return ref
-}
-
-func assertShrunkConversationImage(t *testing.T, got, original string) {
-	t.Helper()
-	if got == original {
-		t.Fatal("图片 data URL 未被压缩")
-	}
-	if !strings.HasPrefix(got, "data:image/jpeg;base64,") {
-		t.Fatalf("压缩后应转成 JPEG data URL，实际前缀 %.32q", got)
-	}
-	if n := len(decodeDataURLBytes(t, got)); n > maxResponsesInputImageBytes {
-		t.Fatalf("压缩后图片字节数 = %d，want <= %d", n, maxResponsesInputImageBytes)
-	}
 }
 
 func decodeDataURLBytes(t *testing.T, ref string) []byte {

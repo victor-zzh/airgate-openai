@@ -195,7 +195,7 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 // 在 forwardHTTP 入口调用，保证 API Key / OAuth / Anthropic 等所有路径
 // 拿到的 body 格式一致。当前处理步骤：
 //  1. model 同步（body 中的 model 与 core 传入的 model 对齐）
-//  2. data:image 输入瘦身（对话模型多图时避免上游 413）
+//  2. data:image 输入保持原样（对齐 Codex，不在网关内重采样用户图片）
 //  3. 剔除客户端 previous_response_id（跨账号接续不可靠，会话接续由网关内部管理）
 //  4. 上下文守卫（/v1/chat/completions 超长 messages 裁剪）
 //  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
@@ -223,7 +223,7 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 		}
 	}
 
-	result = shrinkOpenAIConversationImages(result)
+	result = preserveOpenAIConversationImages(result)
 
 	// 剔除客户端传入的 previous_response_id。
 	// AirGate 在多个上游账号之间做负载均衡，客户端的 previous_response_id
@@ -237,12 +237,8 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 	return result
 }
 
-func shrinkOpenAIConversationImages(body []byte) []byte {
-	shrunk, changed := shrinkDataImageURLsInJSON(body, maxResponsesInputImageBytes)
-	if !changed {
-		return body
-	}
-	return shrunk
+func preserveOpenAIConversationImages(body []byte) []byte {
+	return body
 }
 
 func shrinkDataImageURLsInJSON(body []byte, limit int) ([]byte, bool) {

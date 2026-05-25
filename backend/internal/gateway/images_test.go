@@ -1222,6 +1222,9 @@ func TestReceiveWSResponseClassifiesMessageTooBigAsClientError(t *testing.T) {
 	if failure.Kind != responsesFailureKindClient || failure.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("failure = %#v, want client 413", failure)
 	}
+	if failure.Message != sanitizedImageSSEErrorMessage {
+		t.Fatalf("failure message = %q, want %q", failure.Message, sanitizedImageSSEErrorMessage)
+	}
 }
 
 func TestBuildImagesToolCreateMsg_Edit_ShrinksLargeInputImage(t *testing.T) {

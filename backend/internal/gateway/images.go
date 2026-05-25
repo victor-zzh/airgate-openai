@@ -49,7 +49,9 @@ const maxResponsesInputImageBytes = 2 * 1024 * 1024
 const maxRemoteImageBytes = 25 * 1024 * 1024
 
 const sanitizedImageSSEErrorMessage = "请求暂时无法完成，请稍后重试"
-const imageTooLargeSSEErrorMessage = "图片过大，请压缩后重试"
+
+// 历史变量名保留，但实际对外提示保持统一的重试文案，不再暗示用户压缩图片。
+const imageTooLargeSSEErrorMessage = sanitizedImageSSEErrorMessage
 
 // maxEditInputImageBytes 图生图（/images/edits）参考图单张上限。
 // API Key 和 Web Reverse 路径在转发前把超限图片压缩到此阈值以内，
