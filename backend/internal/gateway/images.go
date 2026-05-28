@@ -266,14 +266,6 @@ func buildAPIKeyImagesEditMultipartBody(body []byte, contentType string) ([]byte
 	return buf.Bytes(), mw.FormDataContentType(), nil
 }
 
-func writeMultipartImageRef(mw *multipart.Writer, fieldName, baseName, ref string, shrinkLimit int) error {
-	mimeType, data, err := readImageRefBytes(ref, shrinkLimit)
-	if err != nil {
-		return err
-	}
-	return writeMultipartImageBytes(mw, fieldName, baseName, mimeType, data)
-}
-
 func writeMultipartImageBytes(mw *multipart.Writer, fieldName, baseName, mimeType string, data []byte) error {
 	ext := ".png"
 	switch mimeType {
