@@ -972,8 +972,9 @@ func classifyImageGenCallFailures(failures []ImageGenCallFailure, fallbackDetail
 	return nil
 }
 
-// buildImagesToolCreateMsg 把 Images REST 请求体翻译成 Responses API 的
-// response.create 消息（tools 数组带一个 image_generation 项）。
+// buildImagesToolCreateMsg 把 Images REST 请求体翻译成 Codex HTTP SSE
+// /backend-api/codex/responses 接受的 Responses body（tools 数组带一个
+// image_generation 项）。
 // 返回：上游消息 bytes；n（当前固定 1）；prompt 估算的 token 数（用于计费）。
 //
 // contentType 仅在 isEdit=true 时需要（可能是 multipart/form-data）。
@@ -1068,7 +1069,8 @@ func buildImagesToolCreateMsg(
 		"stream":       true,
 		"store":        false,
 	}
-	msg, err := wrapResponseCreate(payload, imagesOAuthChatModel, session)
+	payload = applySessionFields(payload, session)
+	msg, err := json.Marshal(payload)
 	if err != nil {
 		return nil, 0, 0, err
 	}
