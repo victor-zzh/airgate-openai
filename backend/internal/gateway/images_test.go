@@ -347,6 +347,9 @@ func TestHandleImagesResponse_APIKeyBillingUsesRequestSize(t *testing.T) {
 	if got, want := usageImageUnitPrice(outcome.Usage), "30"; got != want {
 		t.Fatalf("image unit_price = %q, want %q", got, want)
 	}
+	if got, want := usageCostMetadata(outcome.Usage, usageCostImage, "unit"), "USD/1M tokens"; got != want {
+		t.Fatalf("image unit = %q, want %q", got, want)
+	}
 	if got, want := usageCostMetadata(outcome.Usage, usageCostImage, "billing_model"), "gpt-5.5"; got != want {
 		t.Fatalf("image billing_model = %q, want %q", got, want)
 	}
@@ -654,6 +657,9 @@ func TestFillUsageCostWithImageTool(t *testing.T) {
 	}
 	if got, want := usageCostMetadata(usage, usageCostImageTool, "unit_price"), "15"; got != want {
 		t.Errorf("image unit_price = %q, want %q", got, want)
+	}
+	if got, want := usageCostMetadata(usage, usageCostImageTool, "unit"), "USD/1M tokens"; got != want {
+		t.Errorf("image unit = %q, want %q", got, want)
 	}
 }
 

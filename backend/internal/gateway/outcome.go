@@ -598,7 +598,7 @@ func addImageOutputCost(usage *sdk.Usage, key, label string, numImages int, cost
 	}
 	metadata := map[string]string{
 		"unit_price":  fmt.Sprintf("%.10g", pricePerMillion),
-		"unit":        "USD/1M output tokens",
+		"unit":        "USD/1M tokens",
 		"image_count": fmt.Sprintf("%d", numImages),
 		"tokens":      fmt.Sprintf("%d", outputTokens),
 	}
