@@ -257,6 +257,43 @@ func TestHandleStreamResponseFlushesBufferedPreludeWhenOutputArrives(t *testing.
 	}
 }
 
+func TestHandleStreamResponseRecordsDeliveredImagesWhenStreamAborts(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"aGVsbG8=","size":"1024x1024"}}`,
+		"",
+		`data: {"type":"response.output_item.done","item":{"id":"ig_2","type":"image_generation_call","status":"completed","result":"d29ybGQ=","size":"1024x1024"}}`,
+		"",
+		`data: {"type":"response.output_item.done","item":{"id":"ig_3","type":"image_generation_call","status":"completed","result":"YWlyZ2F0ZQ==","size":"1024x1024"}}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	w := httptest.NewRecorder()
+
+	outcome, err := handleStreamResponse(resp, w, time.Now(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeStreamAborted {
+		t.Fatalf("expected OutcomeStreamAborted, got %v", outcome.Kind)
+	}
+	if outcome.Usage == nil {
+		t.Fatal("Usage = nil, want delivered image usage")
+	}
+	if got := usageMetricInt(outcome.Usage, usageMetricImages); got != 3 {
+		t.Fatalf("images metric = %d, want 3", got)
+	}
+	if got := usageCostMetadata(outcome.Usage, usageCostImageTool, "image_count"); got != "3" {
+		t.Fatalf("image_count metadata = %q, want 3", got)
+	}
+	if got := usageCostMetadata(outcome.Usage, usageCostImageTool, "size"); got != "1024x1024" {
+		t.Fatalf("size metadata = %q, want 1024x1024", got)
+	}
+}
+
 func TestClassifyResponsesFailureResetsAtAbsolute(t *testing.T) {
 	// resets_at 是 Unix 时间戳（绝对时间），RetryAfter 应该反推出大致等于
 	// future - now；这里留充分的断言窗口避免时钟抖动。

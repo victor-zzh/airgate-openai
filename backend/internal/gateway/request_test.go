@@ -326,6 +326,97 @@ func TestPreprocessRequestBody_ForcesResponsesStoreFalse(t *testing.T) {
 	}
 }
 
+func TestFilterDisabledImageGenerationTool(t *testing.T) {
+	t.Parallel()
+
+	disabled := http.Header{"X-Airgate-Plugin-Openai-Image-Enabled": []string{"false"}}
+	enabled := http.Header{"X-Airgate-Plugin-Openai-Image-Enabled": []string{"true"}}
+	airgateGroup := http.Header{}
+	airgateGroup.Set("X-Airgate-Group-ID", "42")
+
+	tests := []struct {
+		name       string
+		headers    http.Header
+		body       []byte
+		wantTools  []string
+		wantChoice bool
+	}{
+		{
+			name:       "disabled removes only image tool",
+			headers:    disabled,
+			body:       []byte(`{"model":"gpt-5.4","input":"hi","tools":[{"type":"web_search"},{"type":"image_generation","size":"1024x1024"},{"type":"function","name":"lookup"}],"tool_choice":"auto"}`),
+			wantTools:  []string{"web_search", "function"},
+			wantChoice: true,
+		},
+		{
+			name:       "disabled removes empty required choice",
+			headers:    disabled,
+			body:       []byte(`{"model":"gpt-5.4","input":"hi","tools":[{"type":"image_generation"}],"tool_choice":"required"}`),
+			wantTools:  nil,
+			wantChoice: false,
+		},
+		{
+			name:       "disabled removes explicit image choice",
+			headers:    disabled,
+			body:       []byte(`{"model":"gpt-5.4","input":"hi","tools":[{"type":"image_generation"}],"tool_choice":{"type":"image_generation"}}`),
+			wantTools:  nil,
+			wantChoice: false,
+		},
+		{
+			name:       "enabled keeps image tool",
+			headers:    enabled,
+			body:       []byte(`{"model":"gpt-5.4","input":"hi","tools":[{"type":"image_generation"}],"tool_choice":"auto"}`),
+			wantTools:  []string{"image_generation"},
+			wantChoice: true,
+		},
+		{
+			name:       "airgate group without setting removes image tool",
+			headers:    airgateGroup,
+			body:       []byte(`{"model":"gpt-5.4","input":"hi","tools":[{"type":"image_generation"}]}`),
+			wantTools:  nil,
+			wantChoice: false,
+		},
+		{
+			name:       "missing header keeps image tool for standalone plugin",
+			headers:    nil,
+			body:       []byte(`{"model":"gpt-5.4","input":"hi","tools":[{"type":"image_generation"}]}`),
+			wantTools:  []string{"image_generation"},
+			wantChoice: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := filterDisabledImageGenerationTool(tt.body, tt.headers)
+			tools := gjson.GetBytes(got, "tools")
+			if len(tt.wantTools) == 0 {
+				if tools.Exists() {
+					t.Fatalf("tools should be removed, got %s; body=%s", tools.Raw, got)
+				}
+			} else {
+				if !tools.Exists() || !tools.IsArray() {
+					t.Fatalf("tools missing; body=%s", got)
+				}
+				gotTools := tools.Array()
+				if len(gotTools) != len(tt.wantTools) {
+					t.Fatalf("tools len = %d, want %d; body=%s", len(gotTools), len(tt.wantTools), got)
+				}
+				for i, want := range tt.wantTools {
+					if gotType := gotTools[i].Get("type").String(); gotType != want {
+						t.Fatalf("tools[%d].type = %q, want %q; body=%s", i, gotType, want, got)
+					}
+				}
+			}
+			if gotChoice := gjson.GetBytes(got, "tool_choice").Exists(); gotChoice != tt.wantChoice {
+				t.Fatalf("tool_choice exists = %v, want %v; body=%s", gotChoice, tt.wantChoice, got)
+			}
+		})
+	}
+}
+
 func TestFirstNonEmptyTier_RequestFastFallsBackToUpstreamPriority(t *testing.T) {
 	if got := firstNonEmptyTier("fast", "priority"); got != "priority" {
 		t.Fatalf("firstNonEmptyTier(fast, priority) = %q, want %q", got, "priority")

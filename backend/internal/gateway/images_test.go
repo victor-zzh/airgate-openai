@@ -587,6 +587,37 @@ func TestParseUsage_ImageGenerationCallSummary(t *testing.T) {
 	}
 }
 
+func TestParseUsage_ImageGenerationCallSummaryFromSSEBody(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"aGVsbG8=","size":"1024x1024"}}`,
+		``,
+		`data: {"type":"response.output_item.done","item":{"id":"ig_2","type":"image_generation_call","status":"completed","result":"d29ybGQ=","size":"1024x1024"}}`,
+		``,
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":20},"output":[]}}`,
+		``,
+	}, "\n"))
+	got := parseUsage(body)
+	if got.imageGenCallCount != 2 {
+		t.Fatalf("imageGenCallCount = %d, want 2", got.imageGenCallCount)
+	}
+	if got.imageGenCallSize != "1024x1024" {
+		t.Fatalf("imageGenCallSize = %q, want 1024x1024", got.imageGenCallSize)
+	}
+}
+
+func TestParseUsage_ImageGenerationCallSummaryDedupsCompletedOutput(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"aGVsbG8=","size":"1024x1024"}}`,
+		``,
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":20},"output":[{"id":"ig_1","type":"image_generation_call","status":"completed","result":"aGVsbG8=","size":"1024x1024"},{"id":"ig_2","type":"image_generation_call","status":"completed","result":"d29ybGQ=","size":"1024x1024"}]}}`,
+		``,
+	}, "\n"))
+	got := parseUsage(body)
+	if got.imageGenCallCount != 2 {
+		t.Fatalf("imageGenCallCount = %d, want 2", got.imageGenCallCount)
+	}
+}
+
 func TestCollectImageGenCallSummary(t *testing.T) {
 	b64 := strings.TrimPrefix(testPNGDataURL(1024, 1024, func(x, y int) color.RGBA {
 		return color.RGBA{R: 5, G: 6, B: 7, A: 255}

@@ -326,6 +326,99 @@ func forceResponsesStoreFalse(body []byte, reqPath string) []byte {
 	return body
 }
 
+func filterDisabledImageGenerationTool(body []byte, headers http.Header) []byte {
+	if len(body) == 0 || imageGenerationEnabled(headers) {
+		return body
+	}
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.Exists() || !tools.IsArray() {
+		return body
+	}
+
+	filtered := make([]json.RawMessage, 0, len(tools.Array()))
+	removed := false
+	for _, tool := range tools.Array() {
+		if strings.EqualFold(strings.TrimSpace(tool.Get("type").String()), "image_generation") {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, json.RawMessage(tool.Raw))
+	}
+	if !removed {
+		return body
+	}
+
+	result := body
+	var err error
+	if len(filtered) == 0 {
+		result, err = sjson.DeleteBytes(result, "tools")
+	} else {
+		encoded, marshalErr := json.Marshal(filtered)
+		if marshalErr != nil {
+			return body
+		}
+		result, err = sjson.SetRawBytes(result, "tools", encoded)
+	}
+	if err != nil {
+		return body
+	}
+	result = cleanupImageToolChoiceAfterFilter(result)
+	return result
+}
+
+func imageGenerationEnabled(headers http.Header) bool {
+	if headers == nil {
+		return true
+	}
+	raw := strings.TrimSpace(headers.Get("X-Airgate-Plugin-Openai-Image-Enabled"))
+	if raw == "" {
+		return !hasAirGateGroupContext(headers)
+	}
+	return strings.EqualFold(raw, "true")
+}
+
+func hasAirGateGroupContext(headers http.Header) bool {
+	return strings.TrimSpace(headers.Get("X-Airgate-Group-ID")) != "" ||
+		strings.TrimSpace(headers.Get("X-Airgate-User-ID")) != "" ||
+		strings.TrimSpace(headers.Get("X-Airgate-API-Key-ID")) != ""
+}
+
+func cleanupImageToolChoiceAfterFilter(body []byte) []byte {
+	choice := gjson.GetBytes(body, "tool_choice")
+	if !choice.Exists() {
+		return body
+	}
+	if choiceForcesImageGeneration(choice) || choiceRequiresNoTools(choice, body) {
+		if modified, err := sjson.DeleteBytes(body, "tool_choice"); err == nil {
+			return modified
+		}
+	}
+	return body
+}
+
+func choiceForcesImageGeneration(choice gjson.Result) bool {
+	if choice.Type == gjson.String {
+		return strings.EqualFold(strings.TrimSpace(choice.String()), "image_generation")
+	}
+	if choice.IsObject() {
+		if strings.EqualFold(strings.TrimSpace(choice.Get("type").String()), "image_generation") {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(choice.Get("name").String()), "image_generation") {
+			return true
+		}
+	}
+	return false
+}
+
+func choiceRequiresNoTools(choice gjson.Result, body []byte) bool {
+	if choice.Type != gjson.String || !strings.EqualFold(strings.TrimSpace(choice.String()), "required") {
+		return false
+	}
+	tools := gjson.GetBytes(body, "tools")
+	return !tools.Exists() || !tools.IsArray() || len(tools.Array()) == 0
+}
+
 // getModelMetadataByID 返回网关内置模型元信息，用于 /v1/models 字段补齐与上下文预算估算
 func getModelMetadataByID(modelID string) map[string]any {
 	id := strings.ToLower(strings.TrimSpace(modelID))

@@ -61,6 +61,9 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	if !strings.HasPrefix(req.Headers.Get("Content-Type"), "multipart/") {
 		req.Body = preprocessRequestBody(req.Body, req.Model, reqPath)
 		req.Body = applyForceInstructions(req.Body, req.Headers)
+		if !isImagesRequest(reqPath) {
+			req.Body = filterDisabledImageGenerationTool(req.Body, req.Headers)
+		}
 		reqServiceTier = normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String())
 		if req.Account.Credentials["api_key"] != "" && req.Account.Credentials["access_token"] == "" {
 			req.Body = applyOpenAIWireServiceTier(req.Body)

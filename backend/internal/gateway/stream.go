@@ -60,8 +60,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	diagnostics := streamResponseDiagnostics{}
 	var pending strings.Builder
 	var toolImageIn, toolImageOut int // 接收 response.tool_usage.image_gen，用于图像工具计费。
-	var imageGenCount int
-	var imageGenSize string
+	imageGenCounter := newImageGenCallCounter()
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -85,12 +84,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 					}
 					break
 				}
-				if ok, size := collectImageGenCallSummary([]byte(data)); ok {
-					imageGenCount++
-					if imageGenSize == "" && size != "" {
-						imageGenSize = size
-					}
-				}
+				imageGenCounter.AddSSEData([]byte(data))
 				if isStreamCompletionEvent(data) {
 					completed = true
 					diagnostics.completionEvent = gjson.Get(data, "type").String()
@@ -140,6 +134,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 		if !streamErrLogged {
 			logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
 		}
+		partialUsage := usageWithImageTool(usage, imageGenCounter.Count(), imageGenCounter.Size(), toolImageIn, toolImageOut)
 		var failure *responsesFailureError
 		if errors.As(streamErr, &failure) {
 			kind := failure.outcomeKind()
@@ -153,6 +148,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 				Reason:     failure.Message,
 				RetryAfter: failure.RetryAfter,
 				Duration:   elapsed,
+				Usage:      partialUsage,
 			}, nil
 		}
 		kind := sdk.OutcomeStreamAborted
@@ -161,25 +157,41 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			kind = sdk.OutcomeUpstreamTransient
 			statusCode = http.StatusBadGateway
 		}
+		returnErr := streamErr
+		if partialUsage != nil && streamStarted {
+			returnErr = nil
+		}
 		return sdk.ForwardOutcome{
 			Kind:     kind,
 			Upstream: sdk.UpstreamResponse{StatusCode: statusCode},
 			Reason:   streamErr.Error(),
 			Duration: elapsed,
-		}, streamErr
+			Usage:    partialUsage,
+		}, returnErr
 	}
 
-	numImages := imageGenCount
-	if numImages <= 0 {
-		numImages = estimateImageCountFromTokens(toolImageOut)
-	}
-	fillUsageCostWithImageTool(usage, numImages, imageGenSize, toolImageIn, toolImageOut)
+	fillUsageCostWithImageTool(usage, imageCountForToolUsage(imageGenCounter.Count(), toolImageOut), imageGenCounter.Size(), toolImageIn, toolImageOut)
 	return sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{StatusCode: resp.StatusCode},
 		Usage:    usage,
 		Duration: elapsed,
 	}, nil
+}
+
+func usageWithImageTool(usage *sdk.Usage, numImages int, size string, imageInputTokens, imageOutputTokens int) *sdk.Usage {
+	if usage == nil || numImages <= 0 {
+		return nil
+	}
+	fillUsageCostWithImageTool(usage, imageCountForToolUsage(numImages, imageOutputTokens), size, imageInputTokens, imageOutputTokens)
+	return usage
+}
+
+func imageCountForToolUsage(numImages, imageOutputTokens int) int {
+	if numImages > 0 {
+		return numImages
+	}
+	return estimateImageCountFromTokens(imageOutputTokens)
 }
 
 func logUpstreamSSEDataDebug(logger *slog.Logger, diagnostics streamResponseDiagnostics, data string) {
@@ -820,6 +832,18 @@ func parseUsage(body []byte) openaiUsage {
 	usage := openaiUsage{}
 	usageNode := gjson.GetBytes(body, "usage")
 	if !usageNode.Exists() {
+		forEachSSEDataPayload(body, func(data []byte) {
+			if usageNode.Exists() {
+				return
+			}
+			eventType := gjson.GetBytes(data, "type").String()
+			if eventType == "response.completed" || eventType == "response.done" {
+				usageNode = gjson.GetBytes(data, "response.usage")
+			}
+		})
+	}
+	if !usageNode.Exists() {
+		usage.imageGenCallCount, usage.imageGenCallSize = collectImageGenCallSummaryFromBody(body)
 		return usage
 	}
 
@@ -879,42 +903,120 @@ func collectImageGenCallSummary(data []byte) (bool, string) {
 }
 
 func collectImageGenCallSummaryFromBody(body []byte) (int, string) {
-	count := 0
-	size := ""
+	counter := newImageGenCallCounter()
 	for _, path := range []string{"output", "response.output"} {
-		output := gjson.GetBytes(body, path)
-		if !output.Exists() || !output.IsArray() {
-			continue
-		}
-		for _, item := range output.Array() {
-			ok, itemSize := collectImageGenCallSummaryFromItem(item)
-			if !ok {
-				continue
-			}
-			count++
-			if size == "" && itemSize != "" {
-				size = itemSize
-			}
-		}
+		counter.AddOutputArray(gjson.GetBytes(body, path))
 	}
-	return count, size
+	forEachSSEDataPayload(body, func(data []byte) {
+		counter.AddSSEData(data)
+	})
+	return counter.Count(), counter.Size()
 }
 
 func collectImageGenCallSummaryFromItem(item gjson.Result) (bool, string) {
-	if item.Get("type").String() != "image_generation_call" {
+	counter := newImageGenCallCounter()
+	if !counter.AddItem(item) {
 		return false, ""
+	}
+	return true, counter.Size()
+}
+
+type imageGenCallCounter struct {
+	seen  map[string]struct{}
+	count int
+	size  string
+}
+
+func newImageGenCallCounter() *imageGenCallCounter {
+	return &imageGenCallCounter{seen: make(map[string]struct{})}
+}
+
+func (c *imageGenCallCounter) Count() int {
+	if c == nil {
+		return 0
+	}
+	return c.count
+}
+
+func (c *imageGenCallCounter) Size() string {
+	if c == nil {
+		return ""
+	}
+	return c.size
+}
+
+func (c *imageGenCallCounter) AddSSEData(data []byte) {
+	if c == nil || len(data) == 0 || !gjson.ValidBytes(data) {
+		return
+	}
+	root := gjson.ParseBytes(data)
+	switch root.Get("type").String() {
+	case "response.output_item.done":
+		c.AddItem(root.Get("item"))
+	case "response.completed", "response.done":
+		c.AddOutputArray(root.Get("response.output"))
+	}
+}
+
+func (c *imageGenCallCounter) AddOutputArray(output gjson.Result) {
+	if c == nil || !output.Exists() || !output.IsArray() {
+		return
+	}
+	for _, item := range output.Array() {
+		c.AddItem(item)
+	}
+}
+
+func (c *imageGenCallCounter) AddItem(item gjson.Result) bool {
+	if c == nil || !item.Exists() || !item.IsObject() {
+		return false
+	}
+	if item.Get("type").String() != "image_generation_call" {
+		return false
 	}
 	result := item.Get("result").String()
 	if result == "" {
-		return false, ""
+		return false
 	}
+	key := strings.TrimSpace(item.Get("id").String())
+	if key == "" {
+		key = strings.TrimSpace(item.Get("call_id").String())
+	}
+	if key == "" {
+		key = result
+	}
+	if _, ok := c.seen[key]; ok {
+		return false
+	}
+	c.seen[key] = struct{}{}
 	size := item.Get("size").String()
 	if size == "" {
 		if actualSize, ok := imageActualSizeFromBase64(result); ok {
 			size = actualSize
 		}
 	}
-	return true, size
+	if c.size == "" && size != "" {
+		c.size = size
+	}
+	c.count++
+	return true
+}
+
+func forEachSSEDataPayload(body []byte, fn func([]byte)) {
+	if len(body) == 0 || fn == nil {
+		return
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		data, ok := extractSSEData(line)
+		if !ok {
+			continue
+		}
+		data = strings.TrimSpace(data)
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		fn([]byte(data))
+	}
 }
 
 // retryDelayPattern 匹配 "try again in Ns" / "try again in Nms" 格式
