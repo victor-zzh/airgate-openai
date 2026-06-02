@@ -257,6 +257,47 @@ func TestHandleStreamResponseFlushesBufferedPreludeWhenOutputArrives(t *testing.
 	}
 }
 
+func TestHandleStreamResponseTreatsResponsesImageContentAsOutput(t *testing.T) {
+	body := strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","output":[]}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","content":[]}}`,
+		"",
+		`event: response.content_part.added`,
+		`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}`,
+		"",
+		`event: response.output_text.done`,
+		`data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":""}`,
+		"",
+		`event: response.content_part.done`,
+		`data: {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","status":"completed","usage":{"input_tokens":10,"output_tokens":2},"output":[{"id":"rs_1","type":"reasoning","encrypted_content":"secret"},{"id":"msg_1","type":"message","content":[{"type":"output_image","image_url":"data:image/png;base64,AAA"}]}]}}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	w := httptest.NewRecorder()
+
+	outcome, err := handleStreamResponse(resp, w, time.Now(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("expected OutcomeSuccess, got %v", outcome.Kind)
+	}
+	got := w.Body.String()
+	if !strings.Contains(got, `"output_image"`) || !strings.Contains(got, "data:image/png;base64,AAA") {
+		t.Fatalf("image content stream was not forwarded completely: %q", got)
+	}
+}
+
 func TestHandleStreamResponseRecordsDeliveredImagesWhenStreamAborts(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","status":"completed","result":"aGVsbG8=","size":"1024x1024"}}`,

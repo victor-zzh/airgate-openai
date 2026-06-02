@@ -372,15 +372,9 @@ func imageGenerationEnabled(headers http.Header) bool {
 	}
 	raw := strings.TrimSpace(headers.Get("X-Airgate-Plugin-Openai-Image-Enabled"))
 	if raw == "" {
-		return !hasAirGateGroupContext(headers)
+		return true
 	}
 	return strings.EqualFold(raw, "true")
-}
-
-func hasAirGateGroupContext(headers http.Header) bool {
-	return strings.TrimSpace(headers.Get("X-Airgate-Group-ID")) != "" ||
-		strings.TrimSpace(headers.Get("X-Airgate-User-ID")) != "" ||
-		strings.TrimSpace(headers.Get("X-Airgate-API-Key-ID")) != ""
 }
 
 func cleanupImageToolChoiceAfterFilter(body []byte) []byte {

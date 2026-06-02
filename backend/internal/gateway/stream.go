@@ -621,6 +621,17 @@ func streamDataHasOutput(data string) bool {
 		return gjson.Get(data, "delta").Exists()
 	case "response.function_call_arguments.done":
 		return gjson.Get(data, "arguments").Exists()
+	case "response.content_part.added", "response.content_part.done":
+		return responseContentPartHasOutput(firstExistingGJSON(
+			gjson.Get(data, "part"),
+			gjson.Get(data, "content_part"),
+			gjson.Get(data, "content"),
+		))
+	case "response.image_generation_call.partial_image":
+		return strings.TrimSpace(firstNonEmptyString(
+			gjson.Get(data, "partial_image").String(),
+			gjson.Get(data, "result").String(),
+		)) != ""
 	case "response.output_item.added", "response.output_item.done":
 		return responseItemHasOutput(gjson.Get(data, "item"))
 	case "response.completed", "response.done":
@@ -670,17 +681,98 @@ func responseItemHasOutput(item gjson.Result) bool {
 	itemType := item.Get("type").String()
 	switch itemType {
 	case "message":
-		for _, content := range item.Get("content").Array() {
-			if strings.TrimSpace(content.Get("text").String()) != "" {
-				return true
+		content := item.Get("content")
+		if content.IsArray() {
+			for _, part := range content.Array() {
+				if responseContentPartHasOutput(part) {
+					return true
+				}
 			}
+			return false
 		}
-		return false
+		return responseContentPartHasOutput(content)
 	case "function_call", "web_search_call", "image_generation_call", "code_interpreter_call":
 		return true
 	default:
 		return strings.Contains(itemType, "call")
 	}
+}
+
+func responseContentPartHasOutput(part gjson.Result) bool {
+	if !part.Exists() {
+		return false
+	}
+	if part.IsArray() {
+		for _, item := range part.Array() {
+			if responseContentPartHasOutput(item) {
+				return true
+			}
+		}
+		return false
+	}
+	if !part.IsObject() {
+		return strings.TrimSpace(part.String()) != ""
+	}
+
+	partType := strings.TrimSpace(firstNonEmptyString(part.Get("type").String(), part.Get("content_type").String()))
+	switch partType {
+	case "output_text", "text", "input_text", "refusal":
+		return strings.TrimSpace(firstNonEmptyString(part.Get("text").String(), part.Get("refusal").String())) != ""
+	}
+
+	for _, path := range []string{
+		"text",
+		"refusal",
+		"image_url",
+		"image_url.url",
+		"asset_pointer",
+		"file_id",
+		"b64_json",
+		"data",
+		"url",
+		"result",
+		"partial_image",
+	} {
+		if strings.TrimSpace(part.Get(path).String()) != "" {
+			return true
+		}
+	}
+
+	switch {
+	case strings.Contains(partType, "image"),
+		strings.Contains(partType, "asset"),
+		strings.Contains(partType, "file"),
+		strings.Contains(partType, "audio"),
+		strings.Contains(partType, "video"):
+		return responseContentPartHasPayload(part)
+	default:
+		return false
+	}
+}
+
+func responseContentPartHasPayload(part gjson.Result) bool {
+	hasPayload := false
+	part.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "type", "content_type", "status", "index", "output_index", "content_index":
+			return true
+		}
+		if responseContentPartHasOutput(value) {
+			hasPayload = true
+			return false
+		}
+		return true
+	})
+	return hasPayload
+}
+
+func firstExistingGJSON(values ...gjson.Result) gjson.Result {
+	for _, value := range values {
+		if value.Exists() {
+			return value
+		}
+	}
+	return gjson.Result{}
 }
 
 func firstNonEmptyHeader(headers http.Header, keys ...string) string {
