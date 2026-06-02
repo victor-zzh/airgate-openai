@@ -108,13 +108,9 @@ var registry = map[string]Spec{
 	// ── GPT-5.4（唯一具备长上下文阶梯的家族）──
 	"gpt-5.4": withLongCtx(std("GPT 5.4", 272000, 128000, 2.5, 0.25, 15.0)),
 
-	// ── Codex 5.x ──
-	"gpt-5.3-codex":       std("GPT 5.3 Codex", 272000, 128000, 1.75, 0.175, 14.0),
+	// ── Codex / GPT 轻量系列 ──
 	"gpt-5.3-codex-spark": std("GPT 5.3 Codex Spark", 128000, 128000, 1.75, 0.175, 14.0),
 	"gpt-5.4-mini":        std("GPT 5.4 Mini", 128000, 128000, 0.75, 0.075, 4.5),
-
-	// ── GPT 基础系列 ──
-	"gpt-5.2": std("GPT 5.2", 272000, 128000, 1.75, 0.175, 14.0),
 
 	// ── 图像生成（默认按对话模型 token 价格计费；固定价由 Core 配置覆盖）──
 	"gpt-image-1":   imgSpec("GPT Image 1"),
@@ -149,7 +145,7 @@ func fallbackByKeyword(id string) (Spec, bool) {
 	// 顺序敏感：先细分（codex / mini / image）后粗分（gpt-5 / gpt-4）
 	switch {
 	case strings.Contains(id, "codex"):
-		return registry["gpt-5.3-codex"], true
+		return registry["gpt-5.4"], true
 	case strings.Contains(id, "image"):
 		return registry["gpt-image-1.5"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):

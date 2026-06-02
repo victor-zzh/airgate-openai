@@ -441,7 +441,7 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	probeBody := []byte(`{"model":"gpt-5.2","instructions":"reply ok","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"store":false,"stream":true}`)
+	probeBody := []byte(`{"model":"gpt-5.4","instructions":"reply ok","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"store":false,"stream":true}`)
 
 	// 构建 HTTP POST 请求到 SSE 端点（与 buildAnthropicUpstreamRequest OAuth 模式一致）
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, ChatGPTSSEURL, bytes.NewReader(probeBody))
