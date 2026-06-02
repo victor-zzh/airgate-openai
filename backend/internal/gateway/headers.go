@@ -38,6 +38,26 @@ func passHeaders(src, dst http.Header) {
 	}
 }
 
+func headerValue(headers http.Header, key string) string {
+	if headers == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(headers.Get(key)); value != "" {
+		return value
+	}
+	for actualKey, values := range headers {
+		if !strings.EqualFold(actualKey, key) {
+			continue
+		}
+		for _, value := range values {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
 // passHeadersForAccount 按账号上游特性透传头部。
 // 对 sub2api 这类聚合上游，去掉容易触发兼容分支的客户端标识头。
 func passHeadersForAccount(src, dst http.Header, account *sdk.Account) {
@@ -561,14 +581,14 @@ func GetProbeError(accountID int64) string {
 
 // isCodexCLI 检测请求是否来自 Codex CLI
 func isCodexCLI(headers http.Header) bool {
-	ua := strings.ToLower(headers.Get("User-Agent"))
+	ua := strings.ToLower(headerValue(headers, "User-Agent"))
 	if strings.Contains(ua, "codex") {
 		return true
 	}
-	if headers.Get("originator") == "codex_cli_rs" {
+	if headerValue(headers, "originator") == "codex_cli_rs" {
 		return true
 	}
-	if headers.Get("x-stainless-timeout") != "" {
+	if headerValue(headers, "x-stainless-timeout") != "" {
 		return true
 	}
 	return false

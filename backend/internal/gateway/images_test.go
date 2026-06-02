@@ -1886,39 +1886,47 @@ func TestForwardImagesViaResponsesTool_InvalidSize(t *testing.T) {
 	}
 }
 
-func TestForwardImagesViaResponsesTool_UsesHTTPSSEForLargeEditImage(t *testing.T) {
+func TestForwardImagesViaResponsesTool_UsesWSForLargeEditImage(t *testing.T) {
 	tinyResult := strings.TrimPrefix(testPNGDataURL(1, 1, func(x, y int) color.RGBA {
 		return color.RGBA{R: 220, G: 40, B: 80, A: 255}
 	}), "data:image/png;base64,")
 
-	var gotMethod string
-	var gotAccept string
-	var gotContentType string
 	var gotAuth string
 	var gotAccountID string
+	var gotOpenAIBeta string
+	var gotOriginator string
 	var gotBody string
 
+	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotAccept = r.Header.Get("Accept")
-		gotContentType = r.Header.Get("Content-Type")
 		gotAuth = r.Header.Get("Authorization")
 		gotAccountID = r.Header.Get("ChatGPT-Account-ID")
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
+		gotOpenAIBeta = r.Header.Get("OpenAI-Beta")
+		gotOriginator = r.Header.Get("originator")
 
-		w.Header().Set("Content-Type", "text/event-stream")
-		flusher, _ := w.(http.Flusher)
-		write := func(line string) {
-			_, _ = io.WriteString(w, line)
-			if flusher != nil {
-				flusher.Flush()
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		var msg json.RawMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			t.Errorf("read websocket request: %v", err)
+			return
+		}
+		gotBody = string(msg)
+
+		write := func(payload string) {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+				t.Errorf("write websocket response: %v", err)
 			}
 		}
 
-		write(`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","tools":[{"type":"image_generation","model":"gpt-image-1.5"}]}}` + "\n\n")
-		write(fmt.Sprintf(`data: {"type":"response.output_item.done","item":{"type":"image_generation_call","id":"call_1","status":"completed","result":"%s","size":"1024x1024","quality":"medium","output_format":"png","model":"gpt-image-1.5"}}`+"\n\n", tinyResult))
-		write(`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":12,"output_tokens":34},"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":9}},"output":[{"type":"image_generation_call","id":"call_1"}]}}` + "\n\n")
+		write(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","tools":[{"type":"image_generation","model":"gpt-image-1.5"}]}}`)
+		write(fmt.Sprintf(`{"type":"response.output_item.done","item":{"type":"image_generation_call","id":"call_1","status":"completed","result":"%s","size":"1024x1024","quality":"medium","output_format":"png","model":"gpt-image-1.5"}}`, tinyResult))
+		write(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":12,"output_tokens":34},"tool_usage":{"image_gen":{"input_tokens":7,"output_tokens":9}},"output":[{"type":"image_generation_call","id":"call_1"}]}}`)
 	}))
 	defer server.Close()
 
@@ -1949,27 +1957,25 @@ func TestForwardImagesViaResponsesTool_UsesHTTPSSEForLargeEditImage(t *testing.T
 		Writer: httptest.NewRecorder(),
 	}
 
-	outcome, err := g.forwardImagesViaResponsesToolWithURL(t.Context(), req, server.URL)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	outcome, err := g.forwardImagesViaResponsesToolWithURL(t.Context(), req, wsURL)
 	if err != nil {
 		t.Fatalf("forwardImagesViaResponsesToolWithURL returned err: %v", err)
 	}
 	if outcome.Kind != sdk.OutcomeSuccess {
 		t.Fatalf("Kind = %v, want Success", outcome.Kind)
 	}
-	if gotMethod != http.MethodPost {
-		t.Fatalf("method = %q, want POST", gotMethod)
-	}
-	if gotAccept != "text/event-stream" {
-		t.Fatalf("Accept = %q, want text/event-stream", gotAccept)
-	}
-	if gotContentType != "application/json" {
-		t.Fatalf("Content-Type = %q, want application/json", gotContentType)
-	}
 	if gotAuth != "Bearer tok" {
 		t.Fatalf("Authorization = %q, want Bearer tok", gotAuth)
 	}
 	if gotAccountID != "acct-123" {
 		t.Fatalf("ChatGPT-Account-ID = %q, want acct-123", gotAccountID)
+	}
+	if gotOpenAIBeta != WSBetaHeader {
+		t.Fatalf("OpenAI-Beta = %q, want %q", gotOpenAIBeta, WSBetaHeader)
+	}
+	if gotOriginator != "codex_cli_rs" {
+		t.Fatalf("originator = %q, want codex_cli_rs", gotOriginator)
 	}
 	if !strings.Contains(gotBody, `"input_image"`) {
 		t.Fatalf("request body missing input_image: %s", gotBody)

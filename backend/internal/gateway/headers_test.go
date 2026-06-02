@@ -56,6 +56,20 @@ func TestPassHeadersForAccount_NonSub2APIKeepsAllowedHeaders(t *testing.T) {
 	}
 }
 
+func TestHeaderValueReadsNonCanonicalKey(t *testing.T) {
+	headers := http.Header{
+		"originator":          []string{"codex_cli_rs"},
+		"x-stainless-timeout": []string{"30"},
+	}
+
+	if got := headerValue(headers, "originator"); got != "codex_cli_rs" {
+		t.Fatalf("headerValue(originator) = %q, want codex_cli_rs", got)
+	}
+	if !isCodexCLI(headers) {
+		t.Fatal("isCodexCLI should detect lowercase originator header")
+	}
+}
+
 func TestCodexUsageSnapshotNormalize_PrimaryOnlyShortResetIs5h(t *testing.T) {
 	snapshot := &CodexUsageSnapshot{
 		PrimaryUsedPercent:       42,

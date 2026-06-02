@@ -538,7 +538,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		SessionID:      session.SessionID,
 		ConversationID: session.ConversationID,
 		TurnState:      session.LastTurnState,
-		Originator:     req.Headers.Get("originator"),
+		Originator:     headerValue(req.Headers, "originator"),
 	}
 
 	logger.Debug("upstream_request_start",
