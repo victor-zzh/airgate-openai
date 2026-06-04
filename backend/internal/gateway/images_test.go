@@ -1727,6 +1727,51 @@ func TestBuildImagesRESTResponse_ChainedCostParity(t *testing.T) {
 	}
 }
 
+func TestAccountRequiresResponsesImageTool(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		want   bool
+	}{
+		{name: "responses only", header: "responses_tool", want: true},
+		{name: "both protocols", header: "images_api,responses_tool", want: false},
+		{name: "images only", header: "images_api", want: false},
+		{name: "empty", header: "", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := http.Header{}
+			headers.Set("X-Airgate-Account-Image-Protocols", tc.header)
+			if got := accountRequiresResponsesImageTool(headers); got != tc.want {
+				t.Fatalf("accountRequiresResponsesImageTool(%q) = %v, want %v", tc.header, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestImageGenCallsFromResponsesBody(t *testing.T) {
+	body := []byte(`{
+		"tools":[{"type":"image_generation","model":"gpt-image-2"}],
+		"output":[
+			{"type":"message","content":[]},
+			{"type":"image_generation_call","id":"ig_1","status":"completed","result":"AAA","size":"1024x1024","quality":"medium","output_format":"png","revised_prompt":"rp"},
+			{"type":"image_generation_call","id":"ig_2","status":"generating","result":"BBB"}
+		]
+	}`)
+
+	got := imageGenCallsFromResponsesBody(body)
+	if got.ToolImageModel != "gpt-image-2" {
+		t.Fatalf("ToolImageModel = %q, want gpt-image-2", got.ToolImageModel)
+	}
+	if len(got.ImageGenCalls) != 1 {
+		t.Fatalf("ImageGenCalls len = %d, want 1", len(got.ImageGenCalls))
+	}
+	call := got.ImageGenCalls[0]
+	if call.ID != "ig_1" || call.Result != "AAA" || call.Size != "1024x1024" || call.RevisedPrompt != "rp" {
+		t.Fatalf("call parsed incorrectly: %+v", call)
+	}
+}
+
 // TestLookupImageGenOutputTokens 按 OpenAI 官方表验证 size×quality→token 估算。
 func TestLookupImageGenOutputTokens(t *testing.T) {
 	cases := []struct {

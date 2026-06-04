@@ -1107,6 +1107,16 @@ func buildImagesToolCreateMsg(
 	isEdit bool,
 	session openAISessionResolution,
 ) ([]byte, int, int, error) {
+	return buildImagesToolResponsesBody(body, contentType, isEdit, imagesOAuthChatModel, session)
+}
+
+func buildImagesToolResponsesBody(
+	body []byte,
+	contentType string,
+	isEdit bool,
+	chatModel string,
+	session openAISessionResolution,
+) ([]byte, int, int, error) {
 	req, err := parseImagesRequest(body, contentType, isEdit)
 	if err != nil {
 		return nil, 0, 0, err
@@ -1188,7 +1198,7 @@ func buildImagesToolCreateMsg(
 		},
 	}
 	payload := map[string]any{
-		"model":        imagesOAuthChatModel,
+		"model":        chatModel,
 		"instructions": instructions,
 		"input":        inputList,
 		"tools":        []any{tool},

@@ -123,6 +123,9 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	}
 
 	if account.Credentials["api_key"] != "" {
+		if isImagesRequest(reqPath) && accountRequiresResponsesImageTool(req.Headers) {
+			return g.forwardAPIKeyImagesViaResponsesTool(ctx, req, reqServiceTier)
+		}
 		return g.forwardAPIKey(ctx, req, reqServiceTier)
 	}
 	if account.Credentials["access_token"] != "" {
