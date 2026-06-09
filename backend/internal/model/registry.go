@@ -102,6 +102,12 @@ func withLongCtx(s Spec) Spec {
 
 // registry 全局模型注册表（按模型 ID 索引）
 // ─── 新增模型只需在此处加一行 ───
+//
+// 注意：Claude 系列模型（claude-opus-*、claude-sonnet-*、claude-haiku-*）不在此注册。
+// 它们由客户端经 /v1/messages Anthropic 协议翻译入口传入，插件内部映射为 GPT 模型
+// 后再调用上游。Core 调度层通过 scheduling_model.go 的硬编码回退处理映射。
+// 若将来需要插件声明此映射，可在 toModelInfo 中为对应模型设置
+// Metadata["scheduling_model"]，Core 会优先读取该元数据。
 var registry = map[string]Spec{
 	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 400000, 128000, 5.0, 0.5, 30.0), 2.5),
 
@@ -228,14 +234,22 @@ type NamedSpec struct {
 }
 
 // toModelInfo 将内部 Spec 映射为 SDK ModelInfo。
+// 若模型需要 Core 调度层使用不同的模型进行账号选择，可设置
+// Metadata["scheduling_model"]，Core 会优先采纳（见 core scheduling_model.go）。
+// 图像生成模型声明 Metadata["family"]="gpt-image"，使 Core 按家族维度做限流冷却，
+// 避免 gpt-image 撞 4000/min 时误伤同账号上的 chat 模型。
 func toModelInfo(id string, spec Spec) sdk.ModelInfo {
-	return sdk.ModelInfo{
+	mi := sdk.ModelInfo{
 		ID:              id,
 		Name:            spec.Name,
 		ContextWindow:   spec.ContextWindow,
 		MaxOutputTokens: spec.MaxOutputTokens,
 		Capabilities:    modelCapabilities(spec),
 	}
+	if spec.ImageOnly {
+		mi.Metadata = map[string]string{"family": "gpt-image"}
+	}
+	return mi
 }
 
 func modelCapabilities(spec Spec) []string {
