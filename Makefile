@@ -90,11 +90,13 @@ vet: ## 静态分析
 
 # ===================== Git Hooks =====================
 
-setup-hooks: ## 安装 Git pre-commit hook
+setup-hooks: ## 安装 Git hooks（pre-commit + commit-msg）
 	@echo '#!/bin/sh' > .git/hooks/pre-commit
 	@echo 'make pre-commit' >> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "pre-commit hook 已安装"
+	@cp scripts/commit-msg .git/hooks/commit-msg
+	@chmod +x .git/hooks/commit-msg
+	@echo "Git hooks 已安装（pre-commit + commit-msg）"
 
 # ===================== 清理 =====================
 
