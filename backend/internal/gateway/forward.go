@@ -332,8 +332,10 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		"account_type", "apikey",
 	)
 
-	client := g.buildHTTPClient(account)
-	resp, err := client.Do(upstreamReq)
+	// 图像请求虽带 stream 但走 io.ReadAll/异步轮询，不是 token SSE，保持原总超时；
+	// 仅真正的 SSE token 流走"无总超时 + 首字节 + 读空闲"模型。
+	streamable := req.Stream && req.Writer != nil && !isImagesRequest(reqPath)
+	resp, cancel, err := g.doStreamableUpstream(ctx, upstreamReq, account, streamable)
 	if err != nil {
 		dur := time.Since(start)
 		if sseKA != nil {
@@ -354,6 +356,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		// 网络层错误，无上游 HTTP 响应
 		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
+	defer cancel()
 	defer func() { _ = resp.Body.Close() }()
 
 	// 非 2xx 统一走 failureOutcome 归类。包含 4xx（客户端错）/ 429 / 401 / 403 / 5xx。
@@ -923,4 +926,65 @@ func (g *OpenAIGateway) buildHTTPClient(account *sdk.Account) *http.Client {
 		Transport: transport,
 		Timeout:   g.requestTimeout(),
 	}
+}
+
+const (
+	defaultFirstByteTimeout  = 60 * time.Second
+	defaultStreamIdleTimeout = 60 * time.Second
+)
+
+// firstByteTimeout 流式等首响应头上限（可经 config first_byte_timeout 覆盖）。
+func (g *OpenAIGateway) firstByteTimeout() time.Duration {
+	if g == nil || g.ctx == nil || g.ctx.Config() == nil {
+		return defaultFirstByteTimeout
+	}
+	if d := g.ctx.Config().GetDuration("first_byte_timeout"); d > 0 {
+		return d
+	}
+	return defaultFirstByteTimeout
+}
+
+// streamIdleTimeout 流式读空闲上限（可经 config stream_idle_timeout 覆盖）。
+func (g *OpenAIGateway) streamIdleTimeout() time.Duration {
+	if g == nil || g.ctx == nil || g.ctx.Config() == nil {
+		return defaultStreamIdleTimeout
+	}
+	if d := g.ctx.Config().GetDuration("stream_idle_timeout"); d > 0 {
+		return d
+	}
+	return defaultStreamIdleTimeout
+}
+
+// doStreamableUpstream 执行上游请求并统一管理流式超时。
+//
+// stream=true 时：client 不设总超时（避免仍在持续输出的长 SSE 流被"总耗时"掐断）；
+// 首字节计时器仅约束"等响应头"阶段（头到即解除）；返回的 resp.Body 被读空闲守卫包装——
+// 流持续输出就不掐断，连续静默超过 stream_idle_timeout 才中止。
+// stream=false 时：沿用 buildHTTPClient 的总超时（requestTimeout），行为不变。
+// 调用方必须 defer 返回的 cancel；err != nil 时 cancel 已被调用且返回 nil。
+func (g *OpenAIGateway) doStreamableUpstream(ctx context.Context, upstreamReq *http.Request, account *sdk.Account, stream bool) (*http.Response, context.CancelFunc, error) {
+	reqCtx, cancel := context.WithCancel(ctx)
+	upstreamReq = upstreamReq.WithContext(reqCtx)
+
+	var firstByteTimer *time.Timer
+	if stream {
+		firstByteTimer = time.AfterFunc(g.firstByteTimeout(), cancel)
+	}
+
+	client := g.buildHTTPClient(account)
+	if stream {
+		client.Timeout = 0
+	}
+	resp, err := client.Do(upstreamReq)
+	if firstByteTimer != nil {
+		firstByteTimer.Stop()
+	}
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	if stream {
+		resp.Body = newStallGuardBody(resp.Body, g.streamIdleTimeout(), cancel)
+	}
+	return resp, cancel, nil
 }

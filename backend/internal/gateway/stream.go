@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -32,6 +34,49 @@ const largeSSEEventThreshold = 512 * 1024
 const streamDiagnosticPreviewBytes = 1200
 
 const debugUpstreamSSEEnv = "AIRGATE_OPENAI_DEBUG_UPSTREAM_SSE"
+
+// stallGuardBody 包装上游响应体，实现"读空闲"判活：只要持续读到字节就续命，
+// 仅当连续 idle 时长内没有任何新数据时才取消上游请求 ctx，使阻塞中的读取立即返回。
+// 目的：中断"真正卡死"的流，但绝不打断仍在持续输出的长响应（流耗时再长也不掐断）。
+type stallGuardBody struct {
+	rc     io.ReadCloser
+	cancel context.CancelFunc
+	idle   time.Duration
+
+	mu      sync.Mutex
+	timer   *time.Timer
+	stopped bool
+}
+
+// newStallGuardBody 用读空闲守卫包装 body。idle <= 0 或 cancel == nil 时退化为原 body。
+func newStallGuardBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc) io.ReadCloser {
+	if idle <= 0 || cancel == nil {
+		return rc
+	}
+	g := &stallGuardBody{rc: rc, cancel: cancel, idle: idle}
+	g.timer = time.AfterFunc(idle, cancel)
+	return g
+}
+
+func (g *stallGuardBody) Read(p []byte) (int, error) {
+	n, err := g.rc.Read(p)
+	if n > 0 {
+		g.mu.Lock()
+		if !g.stopped {
+			g.timer.Reset(g.idle)
+		}
+		g.mu.Unlock()
+	}
+	return n, err
+}
+
+func (g *stallGuardBody) Close() error {
+	g.mu.Lock()
+	g.stopped = true
+	g.mu.Unlock()
+	g.timer.Stop()
+	return g.rc.Close()
+}
 
 // handleStreamResponse 处理 SSE 流式响应。调用者保证 resp.StatusCode 是 2xx
 // （4xx/5xx 由调用者预先归类，不会进到这里）。

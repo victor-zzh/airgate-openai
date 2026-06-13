@@ -339,8 +339,8 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		"protocol", "anthropic",
 	)
 
-	client := g.buildHTTPClient(account)
-	resp, err := client.Do(upstreamReq)
+	streamable := gjson.GetBytes(req.Body, "stream").Bool() && w != nil
+	resp, cancel, err := g.doStreamableUpstream(ctx, upstreamReq, account, streamable)
 	if err != nil {
 		dur := time.Since(start)
 		logger.Warn("upstream_request_failed",
@@ -352,6 +352,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		)
 		return transientOutcome(err.Error()), nil, fmt.Errorf("请求上游失败: %w", err)
 	}
+	defer cancel()
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
