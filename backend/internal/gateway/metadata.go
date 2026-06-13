@@ -45,6 +45,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodGatewayForward),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStoreURL),
+			sdk.CapabilityForHostMethod(hostMethodAssetsGetBytes),
 		},
 		Metadata: map[string]string{
 			"account.oauth_plans": `[
