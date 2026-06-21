@@ -8,7 +8,7 @@ const (
 	PluginID             = "gateway-openai"
 	PluginDisplayName    = "OpenAI 网关"
 	PluginDescription    = "OpenAI Responses API / Chat Completions 转发"
-	PluginAuthor         = "airgate"
+	PluginAuthor         = "hopbase"
 	PluginPlatform       = "openai"
 	PluginMode           = "simple"
 	PluginMinCoreVersion = "1.0.0"

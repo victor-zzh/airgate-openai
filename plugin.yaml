@@ -4,7 +4,7 @@ id: gateway-openai
 name: OpenAI 网关
 version: dev
 description: OpenAI Responses API / Chat Completions 转发
-author: airgate
+author: hopbase
 type: gateway
 min_core_version: 1.0.0
 dependencies: []
