@@ -335,7 +335,11 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	// 图像请求虽带 stream 但走 io.ReadAll/异步轮询，不是 token SSE，保持原总超时；
 	// 仅真正的 SSE token 流走"无总超时 + 首字节 + 读空闲"模型。
 	streamable := req.Stream && req.Writer != nil && !isImagesRequest(reqPath)
+	doStart := time.Now()
 	resp, cancel, err := g.doStreamableUpstream(ctx, upstreamReq, account, streamable)
+	// TTFT 分段埋点：plugin_pre = 进入 forward → 发起上游；upstream_ttfb = 发起 → 响应头到达
+	pluginPreMs := doStart.Sub(start).Milliseconds()
+	upstreamTTFBMs := time.Since(doStart).Milliseconds()
 	if err != nil {
 		dur := time.Since(start)
 		if sseKA != nil {
@@ -459,9 +463,26 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	}
 
 	if req.Stream && req.Writer != nil {
-		return handleStreamResponseWithLogger(logger, resp, req.Writer, start, reqServiceTier)
+		outcome, streamErr := handleStreamResponseWithLogger(logger, resp, req.Writer, start, reqServiceTier)
+		attachUpstreamTimings(&outcome, pluginPreMs, upstreamTTFBMs)
+		return outcome, streamErr
 	}
-	return handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
+	outcome, dispatchErr := handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
+	attachUpstreamTimings(&outcome, pluginPreMs, upstreamTTFBMs)
+	return outcome, dispatchErr
+}
+
+// attachUpstreamTimings 把 TTFT 分段耗时写入 Usage.Metadata（无 Usage 时跳过）。
+// 键名与 core 侧 ttft_breakdown 汇总日志约定一致，与 airgate-claude 插件对称。
+func attachUpstreamTimings(outcome *sdk.ForwardOutcome, pluginPreMs, upstreamTTFBMs int64) {
+	if outcome == nil || outcome.Usage == nil {
+		return
+	}
+	if outcome.Usage.Metadata == nil {
+		outcome.Usage.Metadata = make(map[string]string, 2)
+	}
+	outcome.Usage.Metadata["plugin_pre_ms"] = strconv.FormatInt(pluginPreMs, 10)
+	outcome.Usage.Metadata["upstream_ttfb_ms"] = strconv.FormatInt(upstreamTTFBMs, 10)
 }
 
 func enrichModelsResponse(resp *http.Response) *http.Response {

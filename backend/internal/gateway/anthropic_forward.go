@@ -340,7 +340,11 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 	)
 
 	streamable := gjson.GetBytes(req.Body, "stream").Bool() && w != nil
+	doStart := time.Now()
 	resp, cancel, err := g.doStreamableUpstream(ctx, upstreamReq, account, streamable)
+	// TTFT 分段埋点（与 forward.go APIKey 路径对称），经 Usage.Metadata 回传 core
+	pluginPreMs := doStart.Sub(start).Milliseconds()
+	upstreamTTFBMs := time.Since(doStart).Milliseconds()
 	if err != nil {
 		dur := time.Since(start)
 		logger.Warn("upstream_request_failed",
@@ -405,6 +409,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		}
 		outcome, err := translateResponsesSSEToAnthropicSSE(ctx, resp, w, originalModel, mappedModel, req.Body, requestServiceTier, defaultServiceTier, start, session)
 		setUsageReasoningEffort(outcome.Usage, resolvedEffort)
+		attachUpstreamTimings(&outcome, pluginPreMs, upstreamTTFBMs)
 		return outcome, nil, err
 	}
 
@@ -417,6 +422,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 	}
 	outcome, err := g.handleAnthropicNonStreamFromResponses(resp, nonStreamWriter, originalModel, mappedModel, req.Body, requestServiceTier, defaultServiceTier, start, session, req.Account.ID)
 	setUsageReasoningEffort(outcome.Usage, resolvedEffort)
+	attachUpstreamTimings(&outcome, pluginPreMs, upstreamTTFBMs)
 	if suppressErrorWrite && outcome.Kind == sdk.OutcomeClientError && outcome.Upstream.StatusCode >= 400 {
 		return outcome, []byte(outcome.Reason), err
 	}

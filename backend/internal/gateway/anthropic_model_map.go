@@ -79,11 +79,15 @@ var (
 // anthropicModelMappings Claude 模型名 → OpenAI 模型映射表
 // 精确匹配优先，通配符匹配其次
 var anthropicModelMappings = map[string]anthropicModelMapping{
+	// Fable → 旗舰高推理，官方定价高于 Opus，映射与降级策略比照 Opus 处理
+	"claude-fable-5": {OpenAIModel: opusTargetModel, FallbackModel: opusFallbackModel, ReasoningEffort: "xhigh"},
+
 	// Opus → 最高推理，普通账号降级到 gpt-5.4
 	"claude-opus-4-6": {OpenAIModel: opusTargetModel, FallbackModel: opusFallbackModel, ReasoningEffort: "xhigh"},
 	"claude-opus-4-5": {OpenAIModel: opusTargetModel, FallbackModel: opusFallbackModel, ReasoningEffort: "xhigh"},
 
 	// Sonnet → 高推理，普通账号降级到 gpt-5.4
+	"claude-sonnet-5":   {OpenAIModel: sonnetTargetModel, FallbackModel: sonnetFallbackModel, ReasoningEffort: "high"},
 	"claude-sonnet-4-6": {OpenAIModel: sonnetTargetModel, FallbackModel: sonnetFallbackModel, ReasoningEffort: "high"},
 	"claude-sonnet-4-5": {OpenAIModel: sonnetTargetModel, FallbackModel: sonnetFallbackModel, ReasoningEffort: "high"},
 
@@ -105,6 +109,8 @@ var anthropicWildcardMappings = []struct {
 	{"claude-sonnet-4-", anthropicModelMapping{OpenAIModel: sonnetTargetModel, FallbackModel: sonnetFallbackModel, ReasoningEffort: "high"}},
 	// claude-opus-4- 所有变体
 	{"claude-opus-4-", anthropicModelMapping{OpenAIModel: opusTargetModel, FallbackModel: opusFallbackModel, ReasoningEffort: "xhigh"}},
+	// claude-fable- 所有变体（如未来出现的带日期快照别名 claude-fable-5-20260601）
+	{"claude-fable-", anthropicModelMapping{OpenAIModel: opusTargetModel, FallbackModel: opusFallbackModel, ReasoningEffort: "xhigh"}},
 	// claude-haiku- 所有变体
 	{"claude-haiku-", anthropicModelMapping{OpenAIModel: haikuTargetModel, FallbackModel: haikuFallbackModel, ReasoningEffort: "low"}},
 	// claude-3.5/3 系列兜底
