@@ -24,6 +24,7 @@ const (
 	hostMethodAssetsStore    = "assets.store"
 	hostMethodAssetsStoreURL = "assets.store_url"
 	hostMethodAssetsGetBytes = "assets.get_bytes"
+	hostMethodModelsCatalog  = "models.catalog"
 )
 
 type hostForwardResponse struct {

@@ -29,6 +29,7 @@ type OpenAIGateway struct {
 	snapshotStore *codexUsagePersistenceStore
 	transportPool *TransportPool
 	tasks         *TaskRegistry
+	catalogCancel context.CancelFunc
 }
 
 func (g *OpenAIGateway) Info() sdk.PluginInfo {
@@ -68,10 +69,17 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 
 func (g *OpenAIGateway) Start(_ context.Context) error {
 	g.logger.Info("OpenAI 网关插件启动")
+	catalogCtx, cancel := context.WithCancel(context.Background())
+	g.catalogCancel = cancel
+	go g.runCatalogRefresh(catalogCtx)
 	return nil
 }
 
 func (g *OpenAIGateway) Stop(_ context.Context) error {
+	if g.catalogCancel != nil {
+		g.catalogCancel()
+		g.catalogCancel = nil
+	}
 	if g.transportPool != nil {
 		g.transportPool.CloseIdle()
 	}

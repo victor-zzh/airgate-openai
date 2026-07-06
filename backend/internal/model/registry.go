@@ -100,7 +100,7 @@ func withLongCtx(s Spec) Spec {
 	return s
 }
 
-// registry 全局模型注册表（按模型 ID 索引）
+// registry 内置模型注册表（按模型 ID 索引），运行时可被后台模型目录覆盖层叠加。
 // ─── 新增模型只需在此处加一行 ───
 //
 // 注意：Claude 系列模型（claude-opus-*、claude-sonnet-*、claude-haiku-*）不在此注册。
@@ -133,35 +133,36 @@ var DefaultSpec = withLongCtx(std("Unknown (billed as gpt-5.4)", 272000, 128000,
 // 这避免了"客户端请求未知模型 → Spec 全 0 → cost=0 免费使用"的坑：只要能看出系列
 // （mini / codex / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.4 标准价。
 func Lookup(modelID string) Spec {
+	reg := activeRegistry()
 	id := strings.ToLower(strings.TrimSpace(modelID))
-	if spec, ok := registry[id]; ok {
+	if spec, ok := reg[id]; ok {
 		return spec
 	}
-	if spec, ok := fallbackByKeyword(id); ok {
+	if spec, ok := fallbackByKeyword(id, reg); ok {
 		return spec
 	}
 	return DefaultSpec
 }
 
 // fallbackByKeyword 从模型 ID 关键字推断最接近的已注册系列。未命中返回 (_, false)。
-func fallbackByKeyword(id string) (Spec, bool) {
+func fallbackByKeyword(id string, reg map[string]Spec) (Spec, bool) {
 	if id == "" {
 		return Spec{}, false
 	}
 	// 顺序敏感：先细分（codex / mini / image）后粗分（gpt-5 / gpt-4）
 	switch {
 	case strings.Contains(id, "codex"):
-		return registry["gpt-5.4"], true
+		return reg["gpt-5.4"], true
 	case strings.Contains(id, "image"):
-		return registry["gpt-image-1.5"], true
+		return reg["gpt-image-1.5"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):
-		return registry["gpt-5.4-mini"], true
+		return reg["gpt-5.4-mini"], true
 	case strings.Contains(id, "gpt-5") || strings.HasPrefix(id, "gpt5") ||
 		strings.Contains(id, "o1") || strings.Contains(id, "o3") || strings.Contains(id, "o4"):
-		return registry["gpt-5.4"], true
+		return reg["gpt-5.4"], true
 	case strings.Contains(id, "gpt-4") || strings.HasPrefix(id, "gpt4"):
 		// gpt-4 系列未显式注册，按 gpt-5.4 标准价计（偏保守）
-		return registry["gpt-5.4"], true
+		return reg["gpt-5.4"], true
 	}
 	return Spec{}, false
 }
@@ -179,15 +180,20 @@ func IsKnown(modelID string) bool {
 	if id == "" {
 		return false
 	}
-	_, ok := registry[id]
+	_, ok := activeRegistry()[id]
 	return ok
 }
 
 // AllSpecs 返回注册模型的 SDK ModelInfo 列表（按 ID 排序）。
 // includeImages=true 时返回对话模型和图像模型，false 时只返回对话模型。
 func AllSpecs(includeImages bool) []sdk.ModelInfo {
-	models := make([]sdk.ModelInfo, 0, len(registry))
-	for id, spec := range registry {
+	reg := activeRegistry()
+	hidden := activeHiddenModels()
+	models := make([]sdk.ModelInfo, 0, len(reg))
+	for id, spec := range reg {
+		if hidden[id] {
+			continue
+		}
 		isImage := spec.ImageOnly
 		if isImage && !includeImages {
 			continue
@@ -200,16 +206,9 @@ func AllSpecs(includeImages bool) []sdk.ModelInfo {
 	return models
 }
 
-// AllModels 返回所有注册模型（不过滤），用于插件运行时声明。
+// AllModels 返回当前对外可见模型，用于插件运行时声明与本地 /v1/models。
 func AllModels() []sdk.ModelInfo {
-	models := make([]sdk.ModelInfo, 0, len(registry))
-	for id, spec := range registry {
-		models = append(models, toModelInfo(id, spec))
-	}
-	sort.Slice(models, func(i, j int) bool {
-		return models[i].ID < models[j].ID
-	})
-	return models
+	return AllSpecs(true)
 }
 
 // AllPricingSpecs 返回所有注册模型的插件私有规格（按 ID 排序）。
@@ -217,8 +216,9 @@ func AllModels() []sdk.ModelInfo {
 // SDK 的 ModelInfo 不承载价格；manifest 如需展示标准价格，应从这里读取插件自己的
 // 计费规格，而不是把价格重新塞回 SDK 结构。
 func AllPricingSpecs() []NamedSpec {
-	items := make([]NamedSpec, 0, len(registry))
-	for id, spec := range registry {
+	reg := activeRegistry()
+	items := make([]NamedSpec, 0, len(reg))
+	for id, spec := range reg {
 		items = append(items, NamedSpec{ID: id, Spec: spec})
 	}
 	sort.Slice(items, func(i, j int) bool {
