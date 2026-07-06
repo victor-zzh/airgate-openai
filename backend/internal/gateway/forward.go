@@ -197,7 +197,7 @@ func buildLocalModelsResponse() sdk.ForwardOutcome {
 			"id":           spec.ID,
 			"object":       "model",
 			"created":      created,
-			"owned_by":     "airgate",
+			"owned_by":     "hopbase",
 			"capabilities": []string{"chat", "reasoning"},
 		}
 		if isImage {
