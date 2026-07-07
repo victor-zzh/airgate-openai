@@ -921,6 +921,85 @@ func TestImageTaskBuildInputKeepsOpenAICompatibleGeminiModelAndSize(t *testing.T
 	}
 }
 
+func TestImageTaskBuildInputRejectsUnsupportedGeminiLiteSize(t *testing.T) {
+	_, _, err := imageGenerateHandler{}.BuildInput(&sdk.ForwardRequest{
+		Model:   "gemini-3.1-flash-lite-image",
+		Body:    []byte(`{"prompt":"a product hero","size":"2048x2048"}`),
+		Headers: http.Header{},
+	}, "/v1/images/generations")
+	if err == nil {
+		t.Fatal("expected unsupported size error")
+	}
+	if !strings.Contains(err.Error(), "gemini-3.1-flash-lite-image") || !strings.Contains(err.Error(), "2048x2048") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateImageModelSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   string
+		size    string
+		wantErr bool
+	}{
+		{name: "gpt image 4k", model: "gpt-image-2", size: "3840x2160"},
+		{name: "banana lite 1k", model: "gemini-3.1-flash-lite-image", size: "1024x1536"},
+		{name: "banana lite rejects 2k", model: "gemini-3.1-flash-lite-image", size: "2048x2048", wantErr: true},
+		{name: "banana 2 rejects 4k", model: "gemini-3.1-flash-image", size: "3840x2160", wantErr: true},
+		{name: "unknown model passes through", model: "custom-image-model", size: "2048x2048"},
+		{name: "empty size passes through", model: "gemini-3.1-flash-lite-image", size: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateImageModelSize(tt.model, tt.size)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestForwardAPIKeyRejectsUnsupportedImageSizeBeforeUpstream(t *testing.T) {
+	upstreamCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"AA=="}]}`))
+	}))
+	defer server.Close()
+
+	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	headers := http.Header{}
+	headers.Set("X-Forwarded-Path", "/v1/images/generations")
+	outcome, err := g.forwardAPIKey(context.Background(), &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
+			"base_url": server.URL,
+			"api_key":  "sk-test",
+		}},
+		Model:   "gemini-3.1-flash-lite-image",
+		Body:    []byte(`{"prompt":"a product hero","size":"2048x2048"}`),
+		Headers: headers,
+	}, "")
+	if err != nil {
+		t.Fatalf("forwardAPIKey returned err: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeClientError {
+		t.Fatalf("outcome kind = %v, want client error", outcome.Kind)
+	}
+	if outcome.Upstream.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", outcome.Upstream.StatusCode)
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("upstreamCalls = %d, want 0", upstreamCalls)
+	}
+	if !strings.Contains(string(outcome.Upstream.Body), "2048x2048") {
+		t.Fatalf("body = %s", outcome.Upstream.Body)
+	}
+}
+
 // TestBuildImagesToolCreateMsg 翻译 Images REST 请求体为 Codex HTTP SSE
 // Responses body，tool 配置保持 Codex 对齐的极简 schema。
 func TestBuildImagesToolCreateMsg(t *testing.T) {

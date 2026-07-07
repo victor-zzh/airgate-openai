@@ -237,6 +237,19 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	imagesBillingSize := ""
 	if isImagesRequest(reqPath) && len(req.Body) > 0 {
 		if parsed, err := parseImagesRequest(req.Body, req.Headers.Get("Content-Type"), isImagesEditRequest(reqPath)); err == nil {
+			if err := validateImageModelSize(firstNonEmptyString(parsed.Model, req.Model), parsed.Size); err != nil {
+				errBody := jsonError(err.Error())
+				return sdk.ForwardOutcome{
+					Kind: sdk.OutcomeClientError,
+					Upstream: sdk.UpstreamResponse{
+						StatusCode: http.StatusBadRequest,
+						Headers:    http.Header{"Content-Type": []string{"application/json"}},
+						Body:       errBody,
+					},
+					Reason:   err.Error(),
+					Duration: time.Since(start),
+				}, nil
+			}
 			imagesBillingSize = parsed.Size
 		}
 	}

@@ -68,6 +68,9 @@ func buildImageTaskInput(req *sdk.ForwardRequest, reqPath string, isEdit bool) (
 	if model == "" {
 		model = req.Model
 	}
+	if err := validateImageModelSize(model, parsed.Size); err != nil {
+		return nil, nil, err
+	}
 
 	// input 只含纯业务参数
 	input := map[string]any{
