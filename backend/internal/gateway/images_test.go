@@ -889,6 +889,38 @@ func TestImageTaskQualityEcho(t *testing.T) {
 	}
 }
 
+func TestImageTaskBuildInputKeepsOpenAICompatibleGeminiModelAndSize(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-Airgate-Group-ID", "123")
+	headers.Set("X-Airgate-API-Key-ID", "456")
+	input, attrs, err := imageGenerateHandler{}.BuildInput(&sdk.ForwardRequest{
+		Model:   "gemini-3.1-flash-lite-image",
+		Body:    []byte(`{"prompt":"a product hero","size":"1024x1024","quality":"standard"}`),
+		Headers: headers,
+	}, "/v1/images/generations")
+	if err != nil {
+		t.Fatalf("BuildInput returned err: %v", err)
+	}
+	if got := input["model"]; got != "gemini-3.1-flash-lite-image" {
+		t.Fatalf("input model = %v", got)
+	}
+	if got := input["size"]; got != "1024x1024" {
+		t.Fatalf("input size = %v", got)
+	}
+	if got := input["group_id"]; got != int64(123) {
+		t.Fatalf("group_id = %v", got)
+	}
+	if got := input["api_key_id"]; got != int64(456) {
+		t.Fatalf("api_key_id = %v", got)
+	}
+	if got := attrs["model"]; got != "gemini-3.1-flash-lite-image" {
+		t.Fatalf("attribute model = %q", got)
+	}
+	if got := attrs["size"]; got != "1024x1024" {
+		t.Fatalf("attribute size = %q", got)
+	}
+}
+
 // TestBuildImagesToolCreateMsg 翻译 Images REST 请求体为 Codex HTTP SSE
 // Responses body，tool 配置保持 Codex 对齐的极简 schema。
 func TestBuildImagesToolCreateMsg(t *testing.T) {
