@@ -235,9 +235,12 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	reqMethod, reqPath := resolveAPIKeyRoute(req)
 	targetURL := buildAPIKeyURL(account, reqPath)
 	imagesBillingSize := ""
+	var parsedImages *imagesRequest
+	var imagesParseErr error
 	if isImagesRequest(reqPath) && len(req.Body) > 0 {
-		if parsed, err := parseImagesRequest(req.Body, req.Headers.Get("Content-Type"), isImagesEditRequest(reqPath)); err == nil {
-			if err := validateImageModelSize(firstNonEmptyString(parsed.Model, req.Model), parsed.Size); err != nil {
+		parsedImages, imagesParseErr = parseImagesRequest(req.Body, req.Headers.Get("Content-Type"), isImagesEditRequest(reqPath))
+		if imagesParseErr == nil {
+			if err := validateImageModelSize(firstNonEmptyString(parsedImages.Model, req.Model), parsedImages.Size); err != nil {
 				errBody := jsonError(err.Error())
 				return sdk.ForwardOutcome{
 					Kind: sdk.OutcomeClientError,
@@ -250,7 +253,43 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 					Duration: time.Since(start),
 				}, nil
 			}
-			imagesBillingSize = parsed.Size
+			imagesBillingSize = parsedImages.Size
+		}
+	}
+	if isImagesRequest(reqPath) {
+		bridgeModel := req.Model
+		if parsedImages != nil && parsedImages.Model != "" {
+			bridgeModel = parsedImages.Model
+		}
+		isEdit := isImagesEditRequest(reqPath)
+		if isEdit && isGeminiImageModel(bridgeModel) {
+			errBody := jsonError("Gemini 图片模型暂不支持 /v1/images/edits，请使用 /v1/images/generations")
+			return sdk.ForwardOutcome{
+				Kind: sdk.OutcomeClientError,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: http.StatusBadRequest,
+					Headers:    http.Header{"Content-Type": []string{"application/json"}},
+					Body:       errBody,
+				},
+				Reason:   "Gemini image edit is not supported",
+				Duration: time.Since(start),
+			}, nil
+		}
+		if shouldBridgeGeminiImageRequest(reqPath, bridgeModel, isEdit) {
+			if imagesParseErr != nil {
+				errBody := jsonError(imagesParseErr.Error())
+				return sdk.ForwardOutcome{
+					Kind: sdk.OutcomeClientError,
+					Upstream: sdk.UpstreamResponse{
+						StatusCode: http.StatusBadRequest,
+						Headers:    http.Header{"Content-Type": []string{"application/json"}},
+						Body:       errBody,
+					},
+					Reason:   imagesParseErr.Error(),
+					Duration: time.Since(start),
+				}, nil
+			}
+			return g.forwardGeminiImageViaGenerateContent(ctx, req, parsedImages, bridgeModel, start)
 		}
 	}
 	if isImagesEditRequest(reqPath) && len(req.Body) > 0 && !strings.HasPrefix(strings.ToLower(req.Headers.Get("Content-Type")), "multipart/") {

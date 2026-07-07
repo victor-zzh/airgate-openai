@@ -946,6 +946,7 @@ func TestValidateImageModelSize(t *testing.T) {
 		{name: "banana lite 1k", model: "gemini-3.1-flash-lite-image", size: "1024x1536"},
 		{name: "banana lite rejects 2k", model: "gemini-3.1-flash-lite-image", size: "2048x2048", wantErr: true},
 		{name: "banana 2 rejects 4k", model: "gemini-3.1-flash-image", size: "3840x2160", wantErr: true},
+		{name: "banana 2 chat variant rejects 4k", model: "gemini-3.1-flash-image-c", size: "3840x2160", wantErr: true},
 		{name: "unknown model passes through", model: "custom-image-model", size: "2048x2048"},
 		{name: "empty size passes through", model: "gemini-3.1-flash-lite-image", size: ""},
 	}
@@ -996,6 +997,108 @@ func TestForwardAPIKeyRejectsUnsupportedImageSizeBeforeUpstream(t *testing.T) {
 		t.Fatalf("upstreamCalls = %d, want 0", upstreamCalls)
 	}
 	if !strings.Contains(string(outcome.Upstream.Body), "2048x2048") {
+		t.Fatalf("body = %s", outcome.Upstream.Body)
+	}
+}
+
+func TestForwardAPIKeyBridgesGeminiImageToGenerateContent(t *testing.T) {
+	upstreamCalls := 0
+	var gotPath string
+	var gotAuth string
+	var gotAspect string
+	var gotImageSize string
+	var gotPrompt string
+	imageB64 := testPNGBase64(1, 1, func(x, y int) color.RGBA {
+		return color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		gotAspect = gjson.GetBytes(body, "generationConfig.imageConfig.aspectRatio").String()
+		gotImageSize = gjson.GetBytes(body, "generationConfig.imageConfig.imageSize").String()
+		gotPrompt = gjson.GetBytes(body, "contents.0.parts.0.text").String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{
+			"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":%q}}]}}]
+		}`, imageB64)))
+	}))
+	defer server.Close()
+
+	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	headers := http.Header{}
+	headers.Set("X-Forwarded-Path", "/v1/images/generations")
+	headers.Set("Content-Type", "application/json")
+	outcome, err := g.forwardAPIKey(context.Background(), &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
+			"base_url": server.URL + "/v1",
+			"api_key":  "sk-test",
+		}},
+		Model:   "gemini-3.1-flash-image",
+		Body:    []byte(`{"model":"gemini-3.1-flash-image","prompt":"a product hero","size":"2048x1152","n":1}`),
+		Headers: headers,
+	}, "")
+	if err != nil {
+		t.Fatalf("forwardAPIKey returned err: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("Kind = %v, want success; body=%s", outcome.Kind, outcome.Upstream.Body)
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstreamCalls = %d, want 1", upstreamCalls)
+	}
+	if gotPath != "/v1beta/models/gemini-3.1-flash-image:generateContent" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+	if gotAspect != "16:9" || gotImageSize != "2K" {
+		t.Fatalf("imageConfig aspect=%q size=%q", gotAspect, gotImageSize)
+	}
+	if gotPrompt != "a product hero" {
+		t.Fatalf("prompt = %q", gotPrompt)
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "model").String(); got != "gemini-3.1-flash-image" {
+		t.Fatalf("response model = %q", got)
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "data.0.b64_json").String(); got != imageB64 {
+		t.Fatalf("response b64 mismatch")
+	}
+}
+
+func TestForwardAPIKeyRejectsGeminiImageEdit(t *testing.T) {
+	upstreamCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	headers := http.Header{}
+	headers.Set("X-Forwarded-Path", "/v1/images/edits")
+	headers.Set("Content-Type", "application/json")
+	outcome, err := g.forwardAPIKey(context.Background(), &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
+			"base_url": server.URL,
+			"api_key":  "sk-test",
+		}},
+		Model:   "gemini-3.1-flash-image",
+		Body:    []byte(`{"model":"gemini-3.1-flash-image","prompt":"edit","image":"data:image/png;base64,AA=="}`),
+		Headers: headers,
+	}, "")
+	if err != nil {
+		t.Fatalf("forwardAPIKey returned err: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeClientError || outcome.Upstream.StatusCode != http.StatusBadRequest {
+		t.Fatalf("outcome = %v status=%d", outcome.Kind, outcome.Upstream.StatusCode)
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("upstreamCalls = %d, want 0", upstreamCalls)
+	}
+	if !strings.Contains(string(outcome.Upstream.Body), "不支持") {
 		t.Fatalf("body = %s", outcome.Upstream.Body)
 	}
 }
