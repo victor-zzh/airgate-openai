@@ -177,6 +177,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Accept", "application/json")
+	headers.Set("X-Airgate-Platform", PluginPlatform)
 	headers.Set(taskExecHeader, "true")
 	headers.Set(taskIDHeader, strconv.FormatInt(task.ID, 10))
 

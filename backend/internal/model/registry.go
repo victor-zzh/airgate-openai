@@ -124,12 +124,16 @@ var registry = map[string]Spec{
 	"gpt-image-2":   imgSpec("GPT Image 2"),
 
 	// ── OpenAI-compatible Gemini image relays（Nano Banana 系列）──
-	"gemini-2.5-flash-image":         imgSpec("Gemini 2.5 Flash Image"),
-	"gemini-3-pro-image":             imgSpec("Gemini 3 Pro Image"),
-	"gemini-3-pro-image-preview":     imgSpec("Gemini 3 Pro Image Preview"),
-	"gemini-3.1-flash-image":         imgSpec("Gemini 3.1 Flash Image"),
-	"gemini-3.1-flash-image-preview": imgSpec("Gemini 3.1 Flash Image Preview"),
-	"gemini-3.1-flash-lite-image":    imgSpec("Gemini 3.1 Flash Lite Image"),
+	"gemini-2.5-flash-image":           imgSpec("Gemini 2.5 Flash Image"),
+	"gemini-3-pro-image":               imgSpec("Gemini 3 Pro Image"),
+	"gemini-3-pro-image-c":             imgSpec("Gemini 3 Pro Image C"),
+	"gemini-3-pro-image-preview":       imgSpec("Gemini 3 Pro Image Preview"),
+	"gemini-3-pro-image-preview-c":     imgSpec("Gemini 3 Pro Image Preview C"),
+	"gemini-3.1-flash-image":           imgSpec("Gemini 3.1 Flash Image"),
+	"gemini-3.1-flash-image-c":         imgSpec("Gemini 3.1 Flash Image C"),
+	"gemini-3.1-flash-image-preview":   imgSpec("Gemini 3.1 Flash Image Preview"),
+	"gemini-3.1-flash-image-preview-c": imgSpec("Gemini 3.1 Flash Image Preview C"),
+	"gemini-3.1-flash-lite-image":      imgSpec("Gemini 3.1 Flash Lite Image"),
 }
 
 // DefaultSpec 未注册模型的最终兜底值。按 gpt-5.4 标准档计价——宁可略高也不能 0。

@@ -122,8 +122,38 @@ gateway:
       input_price_flex: 2.5
       output_price_flex: 15
       cached_input_price_flex: 0.25
+    - id: gemini-3-pro-image-c
+      name: Gemini 3 Pro Image C
+      context_window: 32000
+      max_output_tokens: 0
+      capabilities:
+        - image_generation
+      input_price: 5
+      output_price: 30
+      cached_input_price: 0.5
+      input_price_priority: 10
+      output_price_priority: 60
+      cached_input_price_priority: 1
+      input_price_flex: 2.5
+      output_price_flex: 15
+      cached_input_price_flex: 0.25
     - id: gemini-3-pro-image-preview
       name: Gemini 3 Pro Image Preview
+      context_window: 32000
+      max_output_tokens: 0
+      capabilities:
+        - image_generation
+      input_price: 5
+      output_price: 30
+      cached_input_price: 0.5
+      input_price_priority: 10
+      output_price_priority: 60
+      cached_input_price_priority: 1
+      input_price_flex: 2.5
+      output_price_flex: 15
+      cached_input_price_flex: 0.25
+    - id: gemini-3-pro-image-preview-c
+      name: Gemini 3 Pro Image Preview C
       context_window: 32000
       max_output_tokens: 0
       capabilities:
@@ -152,8 +182,38 @@ gateway:
       input_price_flex: 2.5
       output_price_flex: 15
       cached_input_price_flex: 0.25
+    - id: gemini-3.1-flash-image-c
+      name: Gemini 3.1 Flash Image C
+      context_window: 32000
+      max_output_tokens: 0
+      capabilities:
+        - image_generation
+      input_price: 5
+      output_price: 30
+      cached_input_price: 0.5
+      input_price_priority: 10
+      output_price_priority: 60
+      cached_input_price_priority: 1
+      input_price_flex: 2.5
+      output_price_flex: 15
+      cached_input_price_flex: 0.25
     - id: gemini-3.1-flash-image-preview
       name: Gemini 3.1 Flash Image Preview
+      context_window: 32000
+      max_output_tokens: 0
+      capabilities:
+        - image_generation
+      input_price: 5
+      output_price: 30
+      cached_input_price: 0.5
+      input_price_priority: 10
+      output_price_priority: 60
+      cached_input_price_priority: 1
+      input_price_flex: 2.5
+      output_price_flex: 15
+      cached_input_price_flex: 0.25
+    - id: gemini-3.1-flash-image-preview-c
+      name: Gemini 3.1 Flash Image Preview C
       context_window: 32000
       max_output_tokens: 0
       capabilities:

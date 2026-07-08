@@ -1001,13 +1001,13 @@ func TestForwardAPIKeyRejectsUnsupportedImageSizeBeforeUpstream(t *testing.T) {
 	}
 }
 
-func TestForwardAPIKeyBridgesGeminiImageToGenerateContent(t *testing.T) {
+func TestForwardAPIKeyKeepsGeminiImageOnOpenAICompatibleImagesAPI(t *testing.T) {
 	upstreamCalls := 0
 	var gotPath string
 	var gotAuth string
-	var gotAspect string
-	var gotImageSize string
+	var gotModel string
 	var gotPrompt string
+	var gotSize string
 	imageB64 := testPNGBase64(1, 1, func(x, y int) color.RGBA {
 		return color.RGBA{R: 10, G: 20, B: 30, A: 255}
 	})
@@ -1016,13 +1016,11 @@ func TestForwardAPIKeyBridgesGeminiImageToGenerateContent(t *testing.T) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		body, _ := io.ReadAll(r.Body)
-		gotAspect = gjson.GetBytes(body, "generationConfig.imageConfig.aspectRatio").String()
-		gotImageSize = gjson.GetBytes(body, "generationConfig.imageConfig.imageSize").String()
-		gotPrompt = gjson.GetBytes(body, "contents.0.parts.0.text").String()
+		gotModel = gjson.GetBytes(body, "model").String()
+		gotPrompt = gjson.GetBytes(body, "prompt").String()
+		gotSize = gjson.GetBytes(body, "size").String()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{
-			"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":%q}}]}}]
-		}`, imageB64)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"data":[{"b64_json":%q}],"model":"gemini-3.1-flash-image"}`, imageB64)))
 	}))
 	defer server.Close()
 
@@ -1048,17 +1046,20 @@ func TestForwardAPIKeyBridgesGeminiImageToGenerateContent(t *testing.T) {
 	if upstreamCalls != 1 {
 		t.Fatalf("upstreamCalls = %d, want 1", upstreamCalls)
 	}
-	if gotPath != "/v1beta/models/gemini-3.1-flash-image:generateContent" {
+	if gotPath != "/v1/images/generations" {
 		t.Fatalf("path = %q", gotPath)
 	}
 	if gotAuth != "Bearer sk-test" {
 		t.Fatalf("Authorization = %q", gotAuth)
 	}
-	if gotAspect != "16:9" || gotImageSize != "2K" {
-		t.Fatalf("imageConfig aspect=%q size=%q", gotAspect, gotImageSize)
+	if gotModel != "gemini-3.1-flash-image" {
+		t.Fatalf("model = %q", gotModel)
 	}
 	if gotPrompt != "a product hero" {
 		t.Fatalf("prompt = %q", gotPrompt)
+	}
+	if gotSize != "2048x1152" {
+		t.Fatalf("size = %q", gotSize)
 	}
 	if got := gjson.GetBytes(outcome.Upstream.Body, "model").String(); got != "gemini-3.1-flash-image" {
 		t.Fatalf("response model = %q", got)

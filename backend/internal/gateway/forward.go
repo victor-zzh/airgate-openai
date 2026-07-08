@@ -275,22 +275,6 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 				Duration: time.Since(start),
 			}, nil
 		}
-		if shouldBridgeGeminiImageRequest(reqPath, bridgeModel, isEdit) {
-			if imagesParseErr != nil {
-				errBody := jsonError(imagesParseErr.Error())
-				return sdk.ForwardOutcome{
-					Kind: sdk.OutcomeClientError,
-					Upstream: sdk.UpstreamResponse{
-						StatusCode: http.StatusBadRequest,
-						Headers:    http.Header{"Content-Type": []string{"application/json"}},
-						Body:       errBody,
-					},
-					Reason:   imagesParseErr.Error(),
-					Duration: time.Since(start),
-				}, nil
-			}
-			return g.forwardGeminiImageViaGenerateContent(ctx, req, parsedImages, bridgeModel, start)
-		}
 	}
 	if isImagesEditRequest(reqPath) && len(req.Body) > 0 && !strings.HasPrefix(strings.ToLower(req.Headers.Get("Content-Type")), "multipart/") {
 		body, contentType, err := buildAPIKeyImagesEditMultipartBody(req.Body, req.Headers.Get("Content-Type"))
