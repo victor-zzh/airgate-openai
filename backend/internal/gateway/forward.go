@@ -97,7 +97,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		return g.handleTaskQuery(ctx, req, handler)
 	}
 
-	if !isImagesRequest(reqPath) && model.IsImageOnly(req.Model) {
+	if !isImagesRequest(reqPath) && model.IsImageOnly(req.Model) && !isGeminiImageChatCompletionsRequest(req, reqPath) {
 		body := jsonError("图像模型不支持 Chat Completions，请使用 Images API")
 		return sdk.ForwardOutcome{
 			Kind: sdk.OutcomeClientError,
@@ -274,6 +274,9 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 				Reason:   "Gemini image edit is not supported",
 				Duration: time.Since(start),
 			}, nil
+		}
+		if !isEdit && isGeminiImageModel(bridgeModel) {
+			return g.forwardAPIKeyGeminiImageViaChat(ctx, req, parsedImages, start)
 		}
 	}
 	if isImagesEditRequest(reqPath) && len(req.Body) > 0 && !strings.HasPrefix(strings.ToLower(req.Headers.Get("Content-Type")), "multipart/") {

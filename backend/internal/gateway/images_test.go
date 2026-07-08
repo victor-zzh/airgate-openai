@@ -1001,12 +1001,14 @@ func TestForwardAPIKeyRejectsUnsupportedImageSizeBeforeUpstream(t *testing.T) {
 	}
 }
 
-func TestForwardAPIKeyKeepsGeminiImageOnOpenAICompatibleImagesAPI(t *testing.T) {
+func TestForwardAPIKeyRoutesGeminiImageThroughOpenAICompatibleChat(t *testing.T) {
 	upstreamCalls := 0
 	var gotPath string
 	var gotAuth string
 	var gotModel string
 	var gotPrompt string
+	var gotModalities []string
+	var gotResponseFormat string
 	var gotSize string
 	imageB64 := testPNGBase64(1, 1, func(x, y int) color.RGBA {
 		return color.RGBA{R: 10, G: 20, B: 30, A: 255}
@@ -1017,10 +1019,13 @@ func TestForwardAPIKeyKeepsGeminiImageOnOpenAICompatibleImagesAPI(t *testing.T) 
 		gotAuth = r.Header.Get("Authorization")
 		body, _ := io.ReadAll(r.Body)
 		gotModel = gjson.GetBytes(body, "model").String()
-		gotPrompt = gjson.GetBytes(body, "prompt").String()
-		gotSize = gjson.GetBytes(body, "size").String()
+		gotPrompt = gjson.GetBytes(body, "messages.0.content").String()
+		for _, item := range gjson.GetBytes(body, "modalities").Array() {
+			gotModalities = append(gotModalities, item.String())
+		}
+		gotResponseFormat = gjson.GetBytes(body, "response_format.type").String()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"data":[{"b64_json":%q}],"model":"gemini-3.1-flash-image"}`, imageB64)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"chatcmpl_1","model":"gemini-3.1-flash-image","choices":[{"message":{"role":"assistant","content":"![image](data:image/png;base64,%s)"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}`, imageB64)))
 	}))
 	defer server.Close()
 
@@ -1046,7 +1051,7 @@ func TestForwardAPIKeyKeepsGeminiImageOnOpenAICompatibleImagesAPI(t *testing.T) 
 	if upstreamCalls != 1 {
 		t.Fatalf("upstreamCalls = %d, want 1", upstreamCalls)
 	}
-	if gotPath != "/v1/images/generations" {
+	if gotPath != "/v1/chat/completions" {
 		t.Fatalf("path = %q", gotPath)
 	}
 	if gotAuth != "Bearer sk-test" {
@@ -1055,17 +1060,32 @@ func TestForwardAPIKeyKeepsGeminiImageOnOpenAICompatibleImagesAPI(t *testing.T) 
 	if gotModel != "gemini-3.1-flash-image" {
 		t.Fatalf("model = %q", gotModel)
 	}
-	if gotPrompt != "a product hero" {
-		t.Fatalf("prompt = %q", gotPrompt)
+	if !strings.Contains(gotPrompt, "a product hero") {
+		t.Fatalf("prompt missing original text: %q", gotPrompt)
+	}
+	if len(gotModalities) != 2 || gotModalities[0] != "text" || gotModalities[1] != "image" {
+		t.Fatalf("modalities = %#v", gotModalities)
+	}
+	if gotResponseFormat != "image" {
+		t.Fatalf("response_format.type = %q", gotResponseFormat)
+	}
+	if strings.Contains(gotPrompt, "2048x1152") {
+		gotSize = "2048x1152"
 	}
 	if gotSize != "2048x1152" {
-		t.Fatalf("size = %q", gotSize)
+		t.Fatalf("prompt missing size hint: %q", gotPrompt)
 	}
 	if got := gjson.GetBytes(outcome.Upstream.Body, "model").String(); got != "gemini-3.1-flash-image" {
 		t.Fatalf("response model = %q", got)
 	}
 	if got := gjson.GetBytes(outcome.Upstream.Body, "data.0.b64_json").String(); got != imageB64 {
 		t.Fatalf("response b64 mismatch")
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "usage.input_tokens").Int(); got != 7 {
+		t.Fatalf("usage.input_tokens = %d, want 7", got)
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "usage.output_tokens").Int(); got != 11 {
+		t.Fatalf("usage.output_tokens = %d, want 11", got)
 	}
 }
 
