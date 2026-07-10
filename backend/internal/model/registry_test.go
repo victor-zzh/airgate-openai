@@ -182,3 +182,124 @@ func TestCatalogOverlay_ImageModelCanBeAddedAndHidden(t *testing.T) {
 		t.Fatalf("新增图像模型 capabilities = %q, want image_generation", caps)
 	}
 }
+
+// TestCatalogOverlay_NewModelDerivesTiersFromStandard 覆盖层新增模型只填标准价时,
+// priority/flex/缓存读必须从标准价推导(×2 / ×0.5 / ×0.1),
+// 而不是继承关键字推断系列(gpt-5.4)的绝对价——gpt-5.6 三档卖错价事故的回归护栏(5.6 已内置,此处用虚构新 ID)。
+func TestCatalogOverlay_NewModelDerivesTiersFromStandard(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"gpt-5.7-nova","name":"GPT 5.7 Nova","pricing":{"input":1,"output":6}}
+	]`)
+
+	spec := Lookup("gpt-5.7-nova")
+	if spec.InputPrice != 1 || spec.OutputPrice != 6 {
+		t.Fatalf("标准价未生效: %+v", spec)
+	}
+	if spec.CachedPrice != 0.1 {
+		t.Fatalf("缓存读应推导为输入×0.1=0.1, got %v", spec.CachedPrice)
+	}
+	if spec.InputPricePriority != 2 || spec.CachedPricePriority != 0.2 || spec.OutputPricePriority != 12 {
+		t.Fatalf("priority 档应推导为标准×2, got %v/%v/%v",
+			spec.InputPricePriority, spec.CachedPricePriority, spec.OutputPricePriority)
+	}
+	if spec.InputPriceFlex != 0.5 || spec.CachedPriceFlex != 0.05 || spec.OutputPriceFlex != 3 {
+		t.Fatalf("flex 档应推导为标准×0.5, got %v/%v/%v",
+			spec.InputPriceFlex, spec.CachedPriceFlex, spec.OutputPriceFlex)
+	}
+	// 结构性字段沿用推断系列(gpt-5 关键字 → gpt-5.4 家族),长上下文阶梯保留
+	base := registry["gpt-5.4"]
+	if spec.LongContextThreshold != base.LongContextThreshold ||
+		spec.LongContextInputMultiplier != base.LongContextInputMultiplier ||
+		spec.LongContextOutputMultiplier != base.LongContextOutputMultiplier {
+		t.Fatalf("长上下文阶梯应沿用推断系列: %+v", spec)
+	}
+}
+
+// TestCatalogOverlay_NewModelExplicitTiersWin 显式给出的档价必须压过推导值。
+func TestCatalogOverlay_NewModelExplicitTiersWin(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"gpt-5.7-vega","pricing":{"input":5,"cached_input":0.5,"output":30,
+	   "priority_input":12.5,"priority_cached_input":1.25,"priority_output":75}}
+	]`)
+
+	spec := Lookup("gpt-5.7-vega")
+	if spec.InputPricePriority != 12.5 || spec.CachedPricePriority != 1.25 || spec.OutputPricePriority != 75 {
+		t.Fatalf("显式 priority 价应生效: %+v", spec)
+	}
+	if spec.CachedPrice != 0.5 {
+		t.Fatalf("显式缓存读价应生效: %v", spec.CachedPrice)
+	}
+	if spec.InputPriceFlex != 2.5 || spec.OutputPriceFlex != 15 {
+		t.Fatalf("未显式给出的 flex 档仍按标准×0.5 推导: %+v", spec)
+	}
+}
+
+// TestCatalogOverlay_BuiltinOverrideKeepsBuiltinTiers 覆盖内置模型的单个价格时,
+// 未覆盖的档价沿用内置绝对价(如 gpt-5.5 priority=×2.5),不重新推导。
+func TestCatalogOverlay_BuiltinOverrideKeepsBuiltinTiers(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"gpt-5.5","pricing":{"output":32}}
+	]`)
+
+	spec := Lookup("gpt-5.5")
+	base := registry["gpt-5.5"]
+	if spec.OutputPrice != 32 {
+		t.Fatalf("显式 output 未生效: %+v", spec)
+	}
+	if spec.InputPricePriority != base.InputPricePriority || spec.OutputPricePriority != base.OutputPricePriority {
+		t.Fatalf("内置模型 priority 档不应被推导改写: got %v/%v want %v/%v",
+			spec.InputPricePriority, spec.OutputPricePriority, base.InputPricePriority, base.OutputPricePriority)
+	}
+}
+
+// TestCatalogOverlay_NewModelWithoutStandardKeepsInferred 条目没给标准价时维持既有行为:
+// 整体沿用关键字推断系列。
+func TestCatalogOverlay_NewModelWithoutStandardKeepsInferred(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"gpt-5.7-rhea","name":"GPT 5.7 Rhea"}
+	]`)
+
+	spec := Lookup("gpt-5.7-rhea")
+	base := registry["gpt-5.4"]
+	if spec.InputPrice != base.InputPrice || spec.OutputPrice != base.OutputPrice ||
+		spec.InputPricePriority != base.InputPricePriority {
+		t.Fatalf("无标准价条目应沿用推断系列绝对价: %+v", spec)
+	}
+	if spec.Name != "GPT 5.7 Rhea" {
+		t.Fatalf("显示名应生效: %q", spec.Name)
+	}
+}
+
+// TestBuiltinGPT56Family 5.6 三档 + 裸名别名的内置价格护栏(2026-07-11 官方 GA 价)。
+func TestBuiltinGPT56Family(t *testing.T) {
+	ResetCatalogOverlay()
+	cases := []struct {
+		id                    string
+		input, cached, output float64
+	}{
+		{"gpt-5.6-sol", 5, 0.5, 30},
+		{"gpt-5.6", 5, 0.5, 30}, // 官方裸名别名 = Sol 价
+		{"gpt-5.6-terra", 2.5, 0.25, 15},
+		{"gpt-5.6-luna", 1, 0.1, 6},
+	}
+	for _, c := range cases {
+		spec, ok := registry[c.id]
+		if !ok {
+			t.Fatalf("%s 应在内置注册表", c.id)
+		}
+		if spec.InputPrice != c.input || spec.CachedPrice != c.cached || spec.OutputPrice != c.output {
+			t.Errorf("%s 价格 = %v/%v/%v, want %v/%v/%v", c.id,
+				spec.InputPrice, spec.CachedPrice, spec.OutputPrice, c.input, c.cached, c.output)
+		}
+		if spec.InputPricePriority != c.input*2 || spec.InputPriceFlex != c.input*0.5 {
+			t.Errorf("%s priority/flex 档应为标准×2/×0.5", c.id)
+		}
+		if spec.LongContextThreshold != 272000 || spec.LongContextInputMultiplier != 2 ||
+			spec.LongContextOutputMultiplier != 1.5 {
+			t.Errorf("%s 长上下文阶梯缺失: %+v", c.id, spec)
+		}
+		if spec.ContextWindow != 1050000 || spec.MaxOutputTokens != 128000 {
+			t.Errorf("%s 上下文规格错误: %d/%d", c.id, spec.ContextWindow, spec.MaxOutputTokens)
+		}
+	}
+}

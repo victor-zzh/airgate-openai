@@ -100,11 +100,7 @@ func parseCatalogOverlay(raw string) (*catalogOverlay, error) {
 		}
 		base, ok := eff[id]
 		if !ok {
-			if inferred, matched := fallbackByKeyword(id, eff); matched {
-				base = inferred
-			} else {
-				base = DefaultSpec
-			}
+			base = inferNewModelBase(id, e, eff)
 		}
 		eff[id] = applyOverlay(base, e)
 		if e.Enabled != nil && !*e.Enabled {
@@ -118,6 +114,35 @@ func parseCatalogOverlay(raw string) (*catalogOverlay, error) {
 
 func normalizeID(id string) string {
 	return strings.ToLower(strings.TrimSpace(id))
+}
+
+// inferNewModelBase 为覆盖层"新增"(非内置)模型构造基底。
+//
+// 结构性字段(上下文窗口、长上下文阶梯、图像标记)沿用关键字推断的最接近系列;
+// 价格字段若条目给出了标准档 input+output,则按官方惯例从标准价推导缺省档:
+// 缓存读=输入×0.1、priority=标准×2、flex=标准×0.5(与 std() 构造惯例一致)。
+// 不能直接继承推断系列的"绝对价"——那会把 gpt-5.4 的 priority/flex/缓存价
+// 错按到价位完全不同的新模型头上(gpt-5.6 三档卖错价事故的同源坑)。
+// 条目未给标准价时维持既有行为:整体沿用推断系列,兜底 DefaultSpec。
+func inferNewModelBase(id string, e overlayEntry, reg map[string]Spec) Spec {
+	base, matched := fallbackByKeyword(id, reg)
+	if !matched {
+		base = DefaultSpec
+	}
+	if e.Pricing == nil || e.Pricing.Input <= 0 || e.Pricing.Output <= 0 {
+		return base
+	}
+	cached := e.Pricing.CachedInput
+	if cached <= 0 {
+		cached = e.Pricing.Input * 0.1
+	}
+	derived := std(base.Name, base.ContextWindow, base.MaxOutputTokens, e.Pricing.Input, cached, e.Pricing.Output)
+	derived.ImageOnly = base.ImageOnly
+	derived.LongContextThreshold = base.LongContextThreshold
+	derived.LongContextInputMultiplier = base.LongContextInputMultiplier
+	derived.LongContextOutputMultiplier = base.LongContextOutputMultiplier
+	derived.LongContextCachedMultiplier = base.LongContextCachedMultiplier
+	return derived
 }
 
 func cloneRegistry(src map[string]Spec) map[string]Spec {

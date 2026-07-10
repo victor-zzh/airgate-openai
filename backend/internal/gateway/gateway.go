@@ -30,6 +30,10 @@ type OpenAIGateway struct {
 	transportPool *TransportPool
 	tasks         *TaskRegistry
 	catalogCancel context.CancelFunc
+
+	// 模型清单推送状态,仅由 runCatalogRefresh 单 goroutine 读写
+	catalogPushed    bool
+	pushedCatalogRaw string
 }
 
 func (g *OpenAIGateway) Info() sdk.PluginInfo {

@@ -1,8 +1,10 @@
 package model
 
 import (
+	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
@@ -18,7 +20,7 @@ import (
 //   - 标准档：Input / Cached / Output
 //   - Priority 档：*Priority 字段（通常标准 × 2；gpt-5.5 为 × 2.5），缺省时 SDK 以 × 2 兜底
 //   - Flex / Batch 档：*Flex 字段（= 标准 × 0.5），缺省时 SDK 以 × 0.5 兜底
-//   - 长上下文档（仅 gpt-5.4 家族）：完整 input_tokens 超过 LongContextThreshold
+//   - 长上下文档（gpt-5.4 / gpt-5.6 家族）：完整 input_tokens 超过 LongContextThreshold
 //     时，整次请求全量按倍率计费
 type Spec struct {
 	Name            string
@@ -49,7 +51,7 @@ type Spec struct {
 	CachedPriceFlex float64
 	OutputPriceFlex float64
 
-	// 长上下文阶梯（只对 gpt-5.4 家族填非零值）。
+	// 长上下文阶梯（只对 gpt-5.4 / gpt-5.6 家族填非零值）。
 	LongContextThreshold        int
 	LongContextInputMultiplier  float64
 	LongContextOutputMultiplier float64
@@ -90,7 +92,7 @@ func imgSpec(name string) Spec {
 	return s
 }
 
-// withLongCtx 在已构造的 Spec 基础上附加 gpt-5.4 家族的长上下文阶梯。
+// withLongCtx 在已构造的 Spec 基础上附加长上下文阶梯（gpt-5.4 / gpt-5.6 家族）。
 // OpenAI 官方：input ×2、cached ×2、output ×1.5，阈值 272k input_tokens。
 func withLongCtx(s Spec) Spec {
 	s.LongContextThreshold = 272_000
@@ -109,9 +111,17 @@ func withLongCtx(s Spec) Spec {
 // 若将来需要插件声明此映射，可在 toModelInfo 中为对应模型设置
 // Metadata["scheduling_model"]，Core 会优先读取该元数据。
 var registry = map[string]Spec{
+	// ── GPT-5.6 家族(2026-07-09 GA):三档同为 1.05M 上下文,>272K 输入整笔 ×2 in / ×1.5 out ──
+	// 官方价 2026-07-11 核实:Sol $5/$30、Terra $2.5/$15、Luna $1/$6,缓存读=输入×10%。
+	// 裸名 gpt-5.6 是 Sol 的官方别名,同价注册,避免走关键字兜底。
+	"gpt-5.6-sol":   withLongCtx(std("GPT 5.6 Sol", 1050000, 128000, 5.0, 0.5, 30.0)),
+	"gpt-5.6":       withLongCtx(std("GPT 5.6", 1050000, 128000, 5.0, 0.5, 30.0)),
+	"gpt-5.6-terra": withLongCtx(std("GPT 5.6 Terra", 1050000, 128000, 2.5, 0.25, 15.0)),
+	"gpt-5.6-luna":  withLongCtx(std("GPT 5.6 Luna", 1050000, 128000, 1.0, 0.1, 6.0)),
+
 	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 400000, 128000, 5.0, 0.5, 30.0), 2.5),
 
-	// ── GPT-5.4（唯一具备长上下文阶梯的家族）──
+	// ── GPT-5.4 ──
 	"gpt-5.4": withLongCtx(std("GPT 5.4", 272000, 128000, 2.5, 0.25, 15.0)),
 
 	// ── Codex / GPT 轻量系列 ──
@@ -151,9 +161,40 @@ func Lookup(modelID string) Spec {
 		return spec
 	}
 	if spec, ok := fallbackByKeyword(id, reg); ok {
+		warnPricingFallbackOnce(id, spec.Name)
 		return spec
 	}
+	warnPricingFallbackOnce(id, DefaultSpec.Name)
 	return DefaultSpec
+}
+
+// 兜底计费告警去重表。上限防被垃圾模型名撑爆内存;到达上限后不再新增告警(已告警的仍去重)。
+const pricingFallbackWarnCap = 512
+
+var (
+	pricingFallbackWarnMu sync.Mutex
+	pricingFallbackWarned = map[string]struct{}{}
+)
+
+// warnPricingFallbackOnce 未注册模型按推断/兜底价计费时告警一次(按模型去重)。
+// gpt-5.6 三档按 gpt-5.4 价静默卖了一天才被人工发现——这条日志就是那次事故的探测器:
+// 看到它就该去后台「模型目录」给该模型配官方价。
+func warnPricingFallbackOnce(modelID, billedAs string) {
+	pricingFallbackWarnMu.Lock()
+	_, seen := pricingFallbackWarned[modelID]
+	full := len(pricingFallbackWarned) >= pricingFallbackWarnCap
+	if !seen && !full {
+		pricingFallbackWarned[modelID] = struct{}{}
+	}
+	pricingFallbackWarnMu.Unlock()
+	if seen || full {
+		return
+	}
+	slog.Warn("model_pricing_fallback",
+		"model", modelID,
+		"billed_as", billedAs,
+		"hint", "未注册模型正按推断价计费,请到后台「模型目录」为其配置官方价",
+	)
 }
 
 // fallbackByKeyword 从模型 ID 关键字推断最接近的已注册系列。未命中返回 (_, false)。
