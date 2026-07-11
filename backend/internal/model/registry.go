@@ -3,6 +3,7 @@ package model
 import (
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -302,7 +303,40 @@ func toModelInfo(id string, spec Spec) sdk.ModelInfo {
 	if spec.ImageOnly {
 		mi.Metadata = map[string]string{"family": "gpt-image"}
 	}
+	mi.Metadata = priceMetadata(spec, mi.Metadata)
 	return mi
+}
+
+// priceMetadata 把内置基础价编进 ModelInfo.Metadata 的 price.* / long_context.* 键。
+//
+// 唯一消费方是 core 后台「模型目录」编辑器（展示各模型的内置地板价与结构默认值，
+// 供管理员对照改价）。计费不读这里——仍由 Forward 按插件私有 Spec 计算，manifest
+// 展示价也仍走 AllPricingSpecs。字符串值用 FormatFloat -1 精度，无损往返。
+func priceMetadata(spec Spec, meta map[string]string) map[string]string {
+	if meta == nil {
+		meta = make(map[string]string, 8)
+	}
+	put := func(key string, v float64) {
+		if v > 0 {
+			meta[key] = strconv.FormatFloat(v, 'f', -1, 64)
+		}
+	}
+	put("price.input", spec.InputPrice)
+	put("price.cached_input", spec.CachedPrice)
+	put("price.output", spec.OutputPrice)
+	put("price.priority_input", spec.InputPricePriority)
+	put("price.priority_cached_input", spec.CachedPricePriority)
+	put("price.priority_output", spec.OutputPricePriority)
+	put("price.flex_input", spec.InputPriceFlex)
+	put("price.flex_cached_input", spec.CachedPriceFlex)
+	put("price.flex_output", spec.OutputPriceFlex)
+	if spec.LongContextThreshold > 0 {
+		meta["long_context.threshold"] = strconv.Itoa(spec.LongContextThreshold)
+		put("long_context.input_multiplier", spec.LongContextInputMultiplier)
+		put("long_context.cached_multiplier", spec.LongContextCachedMultiplier)
+		put("long_context.output_multiplier", spec.LongContextOutputMultiplier)
+	}
+	return meta
 }
 
 func modelCapabilities(spec Spec) []string {
