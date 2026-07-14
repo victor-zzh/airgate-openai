@@ -167,6 +167,34 @@ func TestCatalogOverlay_GPTNewModelKeepsLongContextTier(t *testing.T) {
 	}
 }
 
+// TestCatalogOverlay_NonGPTModelKeepsExplicitLongContext 非 GPT 新模型若在 overlay 里显式
+// 声明 long_context(如 Gemini 3.1 Pro 的 200K 阶梯),修复后仍必须保留——inferNewModelBase
+// 清零默认阶梯,但 applyOverlay 随后应用显式声明。此测试锁定该顺序,防止未来重构悄悄少算钱。
+func TestCatalogOverlay_NonGPTModelKeepsExplicitLongContext(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"gemini-3.1-pro-preview","name":"Gemini 3.1 Pro","pricing":{"input":1.25,"cached_input":0.125,"output":10},
+	   "long_context":{"threshold":200000,"input_multiplier":2,"cached_multiplier":2,"output_multiplier":1.5}}
+	]`)
+	spec := Lookup("gemini-3.1-pro-preview")
+	if spec.LongContextThreshold != 200000 {
+		t.Fatalf("显式声明的长上下文阶梯应保留, got threshold=%d", spec.LongContextThreshold)
+	}
+	if spec.LongContextInputMultiplier != 2 || spec.LongContextCachedMultiplier != 2 || spec.LongContextOutputMultiplier != 1.5 {
+		t.Fatalf("显式倍率应保留, got in=%v cached=%v out=%v",
+			spec.LongContextInputMultiplier, spec.LongContextCachedMultiplier, spec.LongContextOutputMultiplier)
+	}
+}
+
+// TestCatalogOverlay_NonGPTNoPricingAlsoDropsTier 非 GPT 新模型即使没给 pricing(走早返回路径),
+// 也不应携带 DefaultSpec 的阶梯(ToC 的 glm-5.2 无价条目即此情形)。
+func TestCatalogOverlay_NonGPTNoPricingAlsoDropsTier(t *testing.T) {
+	withCatalogOverlay(t, `[{"id":"glm-nopricing","name":"GLM NoPricing","context_window":1000000}]`)
+	spec := Lookup("glm-nopricing")
+	if spec.LongContextThreshold != 0 {
+		t.Fatalf("无价的非 GPT 新模型也不应有阶梯, got threshold=%d", spec.LongContextThreshold)
+	}
+}
+
 func TestCatalogOverlay_DisabledModelHiddenButBillable(t *testing.T) {
 	withCatalogOverlay(t, `[{"id":"gpt-5.4-mini","enabled":false}]`)
 
