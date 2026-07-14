@@ -128,6 +128,14 @@ func inferNewModelBase(id string, e overlayEntry, reg map[string]Spec) Spec {
 	base, matched := fallbackByKeyword(id, reg)
 	if !matched {
 		base = DefaultSpec
+		// 长上下文阶梯(272K 后 ×2 in/×1.5 out)是 OpenAI GPT 家族的计费特性。
+		// 未按关键字匹配到任何内置 GPT 系列的"新增"模型(如 GLM 等第三方模型),
+		// 不应从 DefaultSpec 继承该阶梯——否则会给它们错误地套用 GPT 的长上下文倍率计费。
+		// 确需阶梯的新模型可在 overlay 条目里用 long_context 显式声明(applyOverlay 会应用)。
+		base.LongContextThreshold = 0
+		base.LongContextInputMultiplier = 0
+		base.LongContextOutputMultiplier = 0
+		base.LongContextCachedMultiplier = 0
 	}
 	if e.Pricing == nil || e.Pricing.Input <= 0 || e.Pricing.Output <= 0 {
 		return base

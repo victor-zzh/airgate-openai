@@ -135,6 +135,38 @@ func TestCatalogOverlay_AddNewModel(t *testing.T) {
 	}
 }
 
+// TestCatalogOverlay_NonGPTNewModelHasNoLongContextTier 非 GPT 系列的覆盖层新增模型(如 GLM)
+// 不应继承 DefaultSpec 的 272K 长上下文阶梯——否则 >272K 请求会按 GPT 的 ×2 in/×1.5 out 错误计费。
+func TestCatalogOverlay_NonGPTNewModelHasNoLongContextTier(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"glm-5.2","name":"GLM-5.2","context_window":1000000,"max_output_tokens":128000,
+	   "pricing":{"input":1.4,"cached_input":0.26,"output":4.4}}
+	]`)
+
+	spec := Lookup("glm-5.2")
+	if spec.LongContextThreshold != 0 {
+		t.Fatalf("非 GPT 新模型不应有长上下文阶梯, got threshold=%d", spec.LongContextThreshold)
+	}
+	if spec.LongContextInputMultiplier != 0 || spec.LongContextOutputMultiplier != 0 || spec.LongContextCachedMultiplier != 0 {
+		t.Fatalf("非 GPT 新模型不应有长上下文倍率, got in=%v out=%v cached=%v",
+			spec.LongContextInputMultiplier, spec.LongContextOutputMultiplier, spec.LongContextCachedMultiplier)
+	}
+	if spec.InputPrice != 1.4 || spec.OutputPrice != 4.4 {
+		t.Fatalf("标准价应正常生效: %+v", spec)
+	}
+}
+
+// TestCatalogOverlay_GPTNewModelKeepsLongContextTier 匹配到 GPT 系列的新模型仍应继承 272K 阶梯。
+func TestCatalogOverlay_GPTNewModelKeepsLongContextTier(t *testing.T) {
+	withCatalogOverlay(t, `[
+	  {"id":"gpt-5.7-nova","name":"GPT 5.7 Nova","pricing":{"input":1,"output":6}}
+	]`)
+	spec := Lookup("gpt-5.7-nova")
+	if spec.LongContextThreshold != 272000 {
+		t.Fatalf("匹配 GPT 系列的新模型应保留 272K 阶梯, got %d", spec.LongContextThreshold)
+	}
+}
+
 func TestCatalogOverlay_DisabledModelHiddenButBillable(t *testing.T) {
 	withCatalogOverlay(t, `[{"id":"gpt-5.4-mini","enabled":false}]`)
 
