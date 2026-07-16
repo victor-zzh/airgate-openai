@@ -304,7 +304,23 @@ func toModelInfo(id string, spec Spec) sdk.ModelInfo {
 		mi.Metadata = map[string]string{"family": "gpt-image"}
 	}
 	mi.Metadata = priceMetadata(spec, mi.Metadata)
+	mi.Metadata["vendor"] = vendorForModel(id)
 	return mi
+}
+
+// vendorForModel 按模型 ID 推断厂商标识(metadata 约定键 "vendor")。
+// openai 平台经 OpenAI 兼容协议中继第三方厂商模型(gemini/glm 等):
+// 平台标识表达的是接入协议,vendor 表达模型出品方,供目录展示端区分两者。
+func vendorForModel(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	switch {
+	case strings.HasPrefix(id, "gemini"), strings.HasPrefix(id, "imagen"):
+		return "google"
+	case strings.HasPrefix(id, "glm"):
+		return "zhipu"
+	default:
+		return "openai"
+	}
 }
 
 // priceMetadata 把内置基础价编进 ModelInfo.Metadata 的 price.* / long_context.* 键。
