@@ -1025,7 +1025,7 @@ func TestForwardAPIKeyRoutesGeminiImageThroughOpenAICompatibleChat(t *testing.T)
 		}
 		gotResponseFormat = gjson.GetBytes(body, "response_format.type").String()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"chatcmpl_1","model":"gemini-3.1-flash-image","choices":[{"message":{"role":"assistant","content":"![image](data:image/png;base64,%s)"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}`, imageB64)))
+		_, _ = fmt.Fprintf(w, `{"id":"chatcmpl_1","model":"gemini-3.1-flash-image","choices":[{"message":{"role":"assistant","content":"![image](data:image/png;base64,%s)"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}`, imageB64)
 	}))
 	defer server.Close()
 
@@ -1089,11 +1089,18 @@ func TestForwardAPIKeyRoutesGeminiImageThroughOpenAICompatibleChat(t *testing.T)
 	}
 }
 
-func TestForwardAPIKeyRejectsGeminiImageEdit(t *testing.T) {
+// TestForwardAPIKeyGeminiImageEditViaChatBridge 图生图不再 400，而是转成
+// chat completions 桥接请求：参考图以 image_url 分段携带、响应重组为 Images REST。
+func TestForwardAPIKeyGeminiImageEditViaChatBridge(t *testing.T) {
 	upstreamCalls := 0
+	var upstreamPath string
+	var upstreamBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalls++
-		w.WriteHeader(http.StatusOK)
+		upstreamPath = r.URL.Path
+		upstreamBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"![img](` + tinyPNGDataURL + `)"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}`))
 	}))
 	defer server.Close()
 
@@ -1107,20 +1114,27 @@ func TestForwardAPIKeyRejectsGeminiImageEdit(t *testing.T) {
 			"api_key":  "sk-test",
 		}},
 		Model:   "gemini-3.1-flash-image",
-		Body:    []byte(`{"model":"gemini-3.1-flash-image","prompt":"edit","image":"data:image/png;base64,AA=="}`),
+		Body:    []byte(`{"model":"gemini-3.1-flash-image","prompt":"make it yellow","image":"` + tinyPNGDataURL + `"}`),
 		Headers: headers,
 	}, "")
 	if err != nil {
 		t.Fatalf("forwardAPIKey returned err: %v", err)
 	}
-	if outcome.Kind != sdk.OutcomeClientError || outcome.Upstream.StatusCode != http.StatusBadRequest {
-		t.Fatalf("outcome = %v status=%d", outcome.Kind, outcome.Upstream.StatusCode)
+	if upstreamCalls != 1 || !strings.HasSuffix(upstreamPath, "/v1/chat/completions") {
+		t.Fatalf("upstream calls=%d path=%s, want 1 次 chat completions", upstreamCalls, upstreamPath)
 	}
-	if upstreamCalls != 0 {
-		t.Fatalf("upstreamCalls = %d, want 0", upstreamCalls)
+	parts := gjson.GetBytes(upstreamBody, "messages.0.content")
+	if !parts.IsArray() || len(parts.Array()) != 2 {
+		t.Fatalf("桥接请求应带 text+image 分段: %s", parts.Raw)
 	}
-	if !strings.Contains(string(outcome.Upstream.Body), "不支持") {
-		t.Fatalf("body = %s", outcome.Upstream.Body)
+	if url := parts.Get("1.image_url.url").String(); !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Fatalf("参考图应以 data URL image_url 携带: %.60s", url)
+	}
+	if outcome.Upstream.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", outcome.Upstream.StatusCode, outcome.Upstream.Body)
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "data.0.b64_json").String(); got == "" {
+		t.Fatalf("响应应重组为 Images REST: %s", outcome.Upstream.Body)
 	}
 }
 

@@ -234,6 +234,11 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 
 	reqMethod, reqPath := resolveAPIKeyRoute(req)
 	targetURL := buildAPIKeyURL(account, reqPath)
+	if strings.HasSuffix(reqPath, "/chat/completions") &&
+		isGeminiModel(firstNonEmptyString(req.Model, gjson.GetBytes(req.Body, "model").String())) {
+		// 中继会静默丢弃 video_url 分段导致模型幻觉，统一改写成实测可用的 image_url。
+		req.Body = normalizeGeminiVideoParts(req.Body)
+	}
 	imagesBillingSize := ""
 	var parsedImages *imagesRequest
 	var imagesParseErr error
@@ -261,21 +266,9 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		if parsedImages != nil && parsedImages.Model != "" {
 			bridgeModel = parsedImages.Model
 		}
-		isEdit := isImagesEditRequest(reqPath)
-		if isEdit && isGeminiImageModel(bridgeModel) {
-			errBody := jsonError("Gemini 图片模型暂不支持 /v1/images/edits，请使用 /v1/images/generations")
-			return sdk.ForwardOutcome{
-				Kind: sdk.OutcomeClientError,
-				Upstream: sdk.UpstreamResponse{
-					StatusCode: http.StatusBadRequest,
-					Headers:    http.Header{"Content-Type": []string{"application/json"}},
-					Body:       errBody,
-				},
-				Reason:   "Gemini image edit is not supported",
-				Duration: time.Since(start),
-			}, nil
-		}
-		if !isEdit && isGeminiImageModel(bridgeModel) {
+		// Gemini 图片模型（generations 与 edits）统一走 chat completions 桥接：
+		// 文生图只带 prompt，图生图把参考图转成 image_url 分段一起携带。
+		if isGeminiImageModel(bridgeModel) {
 			return g.forwardAPIKeyGeminiImageViaChat(ctx, req, parsedImages, start)
 		}
 	}

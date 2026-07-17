@@ -28,7 +28,8 @@ func isGeminiImageChatCompletionsRequest(req *sdk.ForwardRequest, reqPath string
 
 func (g *OpenAIGateway) forwardAPIKeyGeminiImageViaChat(ctx context.Context, req *sdk.ForwardRequest, imgReq *imagesRequest, start time.Time) (sdk.ForwardOutcome, error) {
 	if imgReq == nil {
-		parsed, err := parseImagesRequest(req.Body, req.Headers.Get("Content-Type"), false)
+		_, reqPath := resolveAPIKeyRoute(req)
+		parsed, err := parseImagesRequest(req.Body, req.Headers.Get("Content-Type"), isImagesEditRequest(reqPath))
 		if err != nil {
 			body := jsonError(err.Error())
 			return sdk.ForwardOutcome{
@@ -145,13 +146,31 @@ func buildGeminiImageChatRequestBody(modelName string, req *imagesRequest) ([]by
 	if strings.TrimSpace(modelName) == "" {
 		return nil, fmt.Errorf("model 不能为空")
 	}
+	if req != nil && strings.TrimSpace(req.Mask) != "" {
+		return nil, fmt.Errorf("暂不支持 mask 蒙版（Gemini 图片模型），请去掉 mask，用文字描述要修改的区域")
+	}
 	prompt := buildGeminiImageChatPrompt(req)
+	var content any = prompt
+	if req != nil && len(req.Images) > 0 {
+		parts := []map[string]any{{"type": "text", "text": prompt}}
+		for _, ref := range req.Images {
+			dataURL, err := imageRefToDataURL(ref)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": dataURL},
+			})
+		}
+		content = parts
+	}
 	payload := map[string]any{
 		"model": modelName,
 		"messages": []map[string]any{
 			{
 				"role":    "user",
-				"content": prompt,
+				"content": content,
 			},
 		},
 		"modalities": []string{"text", "image"},
@@ -160,6 +179,16 @@ func buildGeminiImageChatRequestBody(modelName string, req *imagesRequest) ([]by
 		},
 	}
 	return json.Marshal(payload)
+}
+
+// imageRefToDataURL 把参考图（data URL 或 http(s) URL）统一读成压缩后的 data URL，
+// 供 chat 桥接以 image_url 分段携带；上游按 Gemini inline 图片消费。
+func imageRefToDataURL(ref string) (string, error) {
+	mimeType, data, err := readImageRefBytes(ref, maxEditInputImageBytes)
+	if err != nil {
+		return "", err
+	}
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
 func buildGeminiImageChatPrompt(req *imagesRequest) string {
