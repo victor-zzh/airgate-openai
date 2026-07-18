@@ -374,10 +374,10 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
           <Row label="销售倍率" value={`${record.sell_rate.toFixed(2)}x`} />
         ) : null}
         {hasRateInfo ? <div style={dividerStyle} /> : null}
-        {!fixedImagePricing ? (
+        {isAdmin && !fixedImagePricing ? (
           <Row label={imageContext ? '倍率前成本' : '原始'} value={money(record.total_cost)} tone="var(--ag-text)" />
         ) : null}
-        {fixedImagePricing && responseLikeRequest ? (
+        {isAdmin && fixedImagePricing && responseLikeRequest ? (
           <Row label="对话原始" value={money(conversationBaseCost)} tone="var(--ag-text)" />
         ) : null}
         {showAccountInfo && record.account_cost !== undefined ? (
