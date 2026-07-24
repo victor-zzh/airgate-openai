@@ -85,12 +85,17 @@ func withPriorityMultiplier(s Spec, multiplier float64) Spec {
 	return s
 }
 
-// imgSpec 构造纯图像模型 Spec。价格使用 gpt-5.5 默认口径，实际图像输出
-// 成本在 gateway 层会单独归入 image cost，便于 Core 配置固定图价时覆盖。
-func imgSpec(name string) Spec {
-	s := std(name, 32000, 0, 5.0, 0.5, 30.0)
+// pricedImageSpec 构造带独立 token 价格的纯图像模型 Spec。图像输出成本在
+// gateway 层会归入 image cost，便于 Core 配置固定图价时覆盖。
+func pricedImageSpec(name string, input, cached, output float64) Spec {
+	s := std(name, 32000, 0, input, cached, output)
 	s.ImageOnly = true
 	return s
+}
+
+// imgSpec 保留 GPT Image 的默认 token fallback 口径。
+func imgSpec(name string) Spec {
+	return pricedImageSpec(name, 5.0, 0.5, 30.0)
 }
 
 // withLongCtx 在已构造的 Spec 基础上附加长上下文阶梯（gpt-5.4 / gpt-5.6 家族）。
@@ -135,16 +140,18 @@ var registry = map[string]Spec{
 	"gpt-image-2":   imgSpec("GPT Image 2"),
 
 	// ── OpenAI-compatible Gemini image relays（Nano Banana 系列）──
-	"gemini-2.5-flash-image":           imgSpec("Gemini 2.5 Flash Image"),
-	"gemini-3-pro-image":               imgSpec("Gemini 3 Pro Image"),
-	"gemini-3-pro-image-c":             imgSpec("Gemini 3 Pro Image C"),
-	"gemini-3-pro-image-preview":       imgSpec("Gemini 3 Pro Image Preview"),
-	"gemini-3-pro-image-preview-c":     imgSpec("Gemini 3 Pro Image Preview C"),
-	"gemini-3.1-flash-image":           imgSpec("Gemini 3.1 Flash Image"),
-	"gemini-3.1-flash-image-c":         imgSpec("Gemini 3.1 Flash Image C"),
-	"gemini-3.1-flash-image-preview":   imgSpec("Gemini 3.1 Flash Image Preview"),
-	"gemini-3.1-flash-image-preview-c": imgSpec("Gemini 3.1 Flash Image Preview C"),
-	"gemini-3.1-flash-lite-image":      imgSpec("Gemini 3.1 Flash Lite Image"),
+	// Azure Gemini 分组使用同一组官方模型基准价，再由 Core 套分组倍率。
+	// -c 是协议变体，与对应非 -c 型号同价。
+	"gemini-2.5-flash-image":           pricedImageSpec("Gemini 2.5 Flash Image", 0.3, 0.03, 30.0),
+	"gemini-3-pro-image":               pricedImageSpec("Gemini 3 Pro Image", 2.0, 0.2, 12.0),
+	"gemini-3-pro-image-c":             pricedImageSpec("Gemini 3 Pro Image C", 2.0, 0.2, 12.0),
+	"gemini-3-pro-image-preview":       pricedImageSpec("Gemini 3 Pro Image Preview", 2.0, 0.2, 12.0),
+	"gemini-3-pro-image-preview-c":     pricedImageSpec("Gemini 3 Pro Image Preview C", 2.0, 0.2, 12.0),
+	"gemini-3.1-flash-image":           pricedImageSpec("Gemini 3.1 Flash Image", 0.5, 0.05, 3.0),
+	"gemini-3.1-flash-image-c":         pricedImageSpec("Gemini 3.1 Flash Image C", 0.5, 0.05, 3.0),
+	"gemini-3.1-flash-image-preview":   pricedImageSpec("Gemini 3.1 Flash Image Preview", 0.5, 0.05, 3.0),
+	"gemini-3.1-flash-image-preview-c": pricedImageSpec("Gemini 3.1 Flash Image Preview C", 0.5, 0.05, 3.0),
+	"gemini-3.1-flash-lite-image":      pricedImageSpec("Gemini 3.1 Flash Lite Image", 0.25, 0.025, 1.5),
 }
 
 // DefaultSpec 未注册模型的最终兜底值。按 gpt-5.4 标准档计价——宁可略高也不能 0。

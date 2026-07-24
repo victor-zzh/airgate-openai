@@ -363,3 +363,42 @@ func TestBuiltinGPT56Family(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltinGeminiImagePricing 锁定 Azure Gemini 生图线路的逐模型基准价。
+// 这些模型曾因共用 imgSpec 被全部误设为 GPT-5.5 的 5/0.5/30。
+func TestBuiltinGeminiImagePricing(t *testing.T) {
+	ResetCatalogOverlay()
+	cases := []struct {
+		id                    string
+		input, cached, output float64
+	}{
+		{"gemini-2.5-flash-image", 0.3, 0.03, 30},
+		{"gemini-3-pro-image", 2, 0.2, 12},
+		{"gemini-3-pro-image-c", 2, 0.2, 12},
+		{"gemini-3-pro-image-preview", 2, 0.2, 12},
+		{"gemini-3-pro-image-preview-c", 2, 0.2, 12},
+		{"gemini-3.1-flash-image", 0.5, 0.05, 3},
+		{"gemini-3.1-flash-image-c", 0.5, 0.05, 3},
+		{"gemini-3.1-flash-image-preview", 0.5, 0.05, 3},
+		{"gemini-3.1-flash-image-preview-c", 0.5, 0.05, 3},
+		{"gemini-3.1-flash-lite-image", 0.25, 0.025, 1.5},
+	}
+	for _, c := range cases {
+		t.Run(c.id, func(t *testing.T) {
+			spec := Lookup(c.id)
+			if !spec.ImageOnly {
+				t.Fatal("Gemini 生图模型必须标记为 ImageOnly")
+			}
+			if spec.InputPrice != c.input || spec.CachedPrice != c.cached || spec.OutputPrice != c.output {
+				t.Fatalf("标准价 = %v/%v/%v, want %v/%v/%v",
+					spec.InputPrice, spec.CachedPrice, spec.OutputPrice, c.input, c.cached, c.output)
+			}
+			if spec.InputPricePriority != c.input*2 || spec.CachedPricePriority != c.cached*2 || spec.OutputPricePriority != c.output*2 {
+				t.Fatalf("priority 价未按标准价 x2 派生: %+v", spec)
+			}
+			if spec.InputPriceFlex != c.input*0.5 || spec.CachedPriceFlex != c.cached*0.5 || spec.OutputPriceFlex != c.output*0.5 {
+				t.Fatalf("flex 价未按标准价 x0.5 派生: %+v", spec)
+			}
+		})
+	}
+}

@@ -483,8 +483,17 @@ func fillUsageCostForModel(usage *sdk.Usage, billingModelID string, includeOutpu
 
 func imageTokenBillingModel(modelID string) string {
 	modelID = strings.TrimSpace(modelID)
-	if modelID == "" || model.IsImageOnly(modelID) {
+	if modelID == "" {
 		return defaultImageTokenBillingModel
+	}
+	if model.IsImageOnly(modelID) {
+		spec := model.Lookup(modelID)
+		fallback := model.Lookup(defaultImageTokenBillingModel)
+		if spec.InputPrice == fallback.InputPrice &&
+			spec.CachedPrice == fallback.CachedPrice &&
+			spec.OutputPrice == fallback.OutputPrice {
+			return defaultImageTokenBillingModel
+		}
 	}
 	return modelID
 }

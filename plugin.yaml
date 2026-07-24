@@ -98,150 +98,150 @@ gateway:
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
+      input_price: 0.3
       output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
+      cached_input_price: 0.03
+      input_price_priority: 0.6
       output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
+      cached_input_price_priority: 0.06
+      input_price_flex: 0.15
       output_price_flex: 15
-      cached_input_price_flex: 0.25
+      cached_input_price_flex: 0.015
     - id: gemini-3-pro-image
       name: Gemini 3 Pro Image
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 2
+      output_price: 12
+      cached_input_price: 0.2
+      input_price_priority: 4
+      output_price_priority: 24
+      cached_input_price_priority: 0.4
+      input_price_flex: 1
+      output_price_flex: 6
+      cached_input_price_flex: 0.1
     - id: gemini-3-pro-image-c
       name: Gemini 3 Pro Image C
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 2
+      output_price: 12
+      cached_input_price: 0.2
+      input_price_priority: 4
+      output_price_priority: 24
+      cached_input_price_priority: 0.4
+      input_price_flex: 1
+      output_price_flex: 6
+      cached_input_price_flex: 0.1
     - id: gemini-3-pro-image-preview
       name: Gemini 3 Pro Image Preview
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 2
+      output_price: 12
+      cached_input_price: 0.2
+      input_price_priority: 4
+      output_price_priority: 24
+      cached_input_price_priority: 0.4
+      input_price_flex: 1
+      output_price_flex: 6
+      cached_input_price_flex: 0.1
     - id: gemini-3-pro-image-preview-c
       name: Gemini 3 Pro Image Preview C
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 2
+      output_price: 12
+      cached_input_price: 0.2
+      input_price_priority: 4
+      output_price_priority: 24
+      cached_input_price_priority: 0.4
+      input_price_flex: 1
+      output_price_flex: 6
+      cached_input_price_flex: 0.1
     - id: gemini-3.1-flash-image
       name: Gemini 3.1 Flash Image
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 0.5
+      output_price: 3
+      cached_input_price: 0.05
+      input_price_priority: 1
+      output_price_priority: 6
+      cached_input_price_priority: 0.1
+      input_price_flex: 0.25
+      output_price_flex: 1.5
+      cached_input_price_flex: 0.025
     - id: gemini-3.1-flash-image-c
       name: Gemini 3.1 Flash Image C
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 0.5
+      output_price: 3
+      cached_input_price: 0.05
+      input_price_priority: 1
+      output_price_priority: 6
+      cached_input_price_priority: 0.1
+      input_price_flex: 0.25
+      output_price_flex: 1.5
+      cached_input_price_flex: 0.025
     - id: gemini-3.1-flash-image-preview
       name: Gemini 3.1 Flash Image Preview
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 0.5
+      output_price: 3
+      cached_input_price: 0.05
+      input_price_priority: 1
+      output_price_priority: 6
+      cached_input_price_priority: 0.1
+      input_price_flex: 0.25
+      output_price_flex: 1.5
+      cached_input_price_flex: 0.025
     - id: gemini-3.1-flash-image-preview-c
       name: Gemini 3.1 Flash Image Preview C
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 0.5
+      output_price: 3
+      cached_input_price: 0.05
+      input_price_priority: 1
+      output_price_priority: 6
+      cached_input_price_priority: 0.1
+      input_price_flex: 0.25
+      output_price_flex: 1.5
+      cached_input_price_flex: 0.025
     - id: gemini-3.1-flash-lite-image
       name: Gemini 3.1 Flash Lite Image
       context_window: 32000
       max_output_tokens: 0
       capabilities:
         - image_generation
-      input_price: 5
-      output_price: 30
-      cached_input_price: 0.5
-      input_price_priority: 10
-      output_price_priority: 60
-      cached_input_price_priority: 1
-      input_price_flex: 2.5
-      output_price_flex: 15
-      cached_input_price_flex: 0.25
+      input_price: 0.25
+      output_price: 1.5
+      cached_input_price: 0.025
+      input_price_priority: 0.5
+      output_price_priority: 3
+      cached_input_price_priority: 0.05
+      input_price_flex: 0.125
+      output_price_flex: 0.75
+      cached_input_price_flex: 0.0125
     - id: gpt-5.3-codex-spark
       name: GPT 5.3 Codex Spark
       context_window: 128000
